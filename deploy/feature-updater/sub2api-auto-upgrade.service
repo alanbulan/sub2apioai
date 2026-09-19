@@ -1,0 +1,11 @@
+[Unit]
+Description=Sub2API official release plus ticket292 feature updater
+Documentation=https://github.com/alanbulan/sub2apioai/tree/feat/openai-codex-turn-state-ticket/deploy/feature-updater
+Wants=network-online.target
+After=network-online.target sub2api.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/sub2api-auto-upgrade.sh
+TimeoutStartSec=30min
+Nice=10

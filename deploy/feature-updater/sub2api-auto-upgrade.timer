@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the Sub2API ticket292 updater daily
+
+[Timer]
+# Server timezone is UTC. This runs at 04:30 Asia/Shanghai.
+OnCalendar=*-*-* 20:30:00
+RandomizedDelaySec=30min
+Persistent=true
+Unit=sub2api-auto-upgrade.service
+
+[Install]
+WantedBy=timers.target
