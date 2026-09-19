@@ -495,7 +495,7 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 	probed := 0
 	for i := range accounts {
 		account := accounts[i]
-		if account.Status != StatusActive || !isOpenAICodexTicketAccount(&account) {
+		if !openAICodexTicketProbeEligible(&account, now) {
 			continue
 		}
 		for _, model := range cfg.Models {
@@ -529,7 +529,7 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 // gAAAAA 前缀）就落库；否则记 Info miss，交给下个周期重试。同一 key 并发去重，避免上一发还没
 // 回来又叠一发。
 func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, account *Account, model string) {
-	if s == nil || !isOpenAICodexTicketAccount(account) || ctx.Err() != nil || !s.openAICodexTicketEnabledContext(ctx) {
+	if s == nil || !openAICodexTicketProbeEligible(account, time.Now()) || ctx.Err() != nil || !s.openAICodexTicketEnabledContext(ctx) {
 		return
 	}
 	cfg := s.openAICodexTicketConfig()
@@ -575,6 +575,39 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 			zap.Int("length", ticket.Length), zap.String("mode", "continuous"))
 		return nil, nil
 	})
+}
+
+func openAICodexTicketProbeEligible(account *Account, now time.Time) bool {
+	if !isOpenAICodexTicketAccount(account) || !account.IsSchedulable() {
+		return false
+	}
+	return !openAICodexTicketQuotaExhausted(account, now)
+}
+
+// A full Codex window cannot produce a useful probe before it resets. Prefer an
+// absolute reset time when present; without one, a fresh snapshot is trusted only
+// until the normal auto-pause staleness bound so malformed legacy data cannot
+// suppress harvesting forever.
+func openAICodexTicketQuotaExhausted(account *Account, now time.Time) bool {
+	if account == nil || len(account.Extra) == 0 {
+		return false
+	}
+	for _, window := range []string{"5h", "7d"} {
+		used, ok := resolveAccountExtraNumber(account.Extra, "codex_"+window+"_used_percent")
+		if !ok || used < 100 {
+			continue
+		}
+		if resetAt, ok := openAICodexWindowResetAt(account.Extra, window); ok {
+			if now.Before(resetAt) {
+				return true
+			}
+			continue
+		}
+		if !openAICodexSnapshotStaleForPause(account.Extra, now) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsOpenAICodexTicketExtraKey identifies server-managed ticket material.

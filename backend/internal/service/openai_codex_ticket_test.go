@@ -27,6 +27,8 @@ func ticketTestAccount(id int64) *Account {
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
 		Credentials: map[string]any{"access_token": "tok", "chatgpt_account_id": "acc-1"},
+		Status:      StatusActive,
+		Schedulable: true,
 	}
 }
 
@@ -389,6 +391,139 @@ func TestRefreshOpenAICodexTickets_ConcurrentModelsPreserveAccountSnapshot(t *te
 	svc.refreshOpenAICodexTickets(context.Background())
 	require.Equal(t, int64(2), upstream.started.Load())
 }
+
+func TestRefreshOpenAICodexTickets_RefreshesBeforeExpiry(t *testing.T) {
+	account := ticketTestAccount(41)
+	repo := &codexTicketRefreshRepo{accounts: []Account{*account}}
+	var calls atomic.Int64
+	upstream := &codexTicketFuncUpstream{do: func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return codexTicketResponse(), nil
+	}}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled:              true,
+		HarvestProxyURL:      "socks5h://proxy.example.com:1080",
+		Models:               []string{"gpt-6-astra"},
+		TTLSeconds:           3600,
+		RefreshBeforeSeconds: 600,
+	}, upstream)
+	svc.accountRepo = repo
+
+	oldState := openAICodexTicketStatePrefix + strings.Repeat("C", 286)
+	oldExpiry := time.Now().Add(9 * time.Minute)
+	svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
+		AccountID:  account.ID,
+		Model:      "gpt-6-astra",
+		State:      oldState,
+		Length:     292,
+		CapturedAt: time.Now().Add(-51 * time.Minute),
+		ExpiresAt:  oldExpiry,
+	})
+	require.True(t, svc.lookupOpenAICodexTicket(account, "gpt-6-astra").valid(time.Now(), 292))
+
+	svc.refreshOpenAICodexTickets(context.Background())
+
+	refreshed := svc.lookupOpenAICodexTicket(account, "gpt-6-astra")
+	require.Equal(t, int64(1), calls.Load())
+	require.NotNil(t, refreshed)
+	require.NotEqual(t, oldState, refreshed.State)
+	require.True(t, refreshed.ExpiresAt.After(oldExpiry))
+}
+
+func TestOpenAICodexTicketProbeEligible(t *testing.T) {
+	now := time.Now()
+	future := now.Add(time.Hour)
+	past := now.Add(-time.Minute)
+	fresh := now.Add(-time.Minute)
+	stale := now.Add(-openAICodexAutoPauseStaleAfter - time.Minute)
+
+	accountWithExtra := func(extra map[string]any) *Account {
+		account := ticketTestAccount(41)
+		account.Extra = extra
+		return account
+	}
+
+	tests := []struct {
+		name    string
+		account *Account
+		want    bool
+	}{
+		{name: "active", account: ticketTestAccount(41), want: true},
+		{name: "manually disabled", account: func() *Account {
+			account := ticketTestAccount(41)
+			account.Schedulable = false
+			return account
+		}(), want: false},
+		{name: "rate limited", account: func() *Account {
+			account := ticketTestAccount(41)
+			account.RateLimitResetAt = &future
+			return account
+		}(), want: false},
+		{name: "five hour quota exhausted", account: accountWithExtra(map[string]any{
+			"codex_5h_used_percent": 100.0,
+			"codex_5h_reset_at":     future.Format(time.RFC3339),
+		}), want: false},
+		{name: "seven day quota exhausted", account: accountWithExtra(map[string]any{
+			"codex_7d_used_percent": 101.0,
+			"codex_7d_reset_at":     future.Format(time.RFC3339),
+		}), want: false},
+		{name: "quota reset elapsed", account: accountWithExtra(map[string]any{
+			"codex_7d_used_percent": 100.0,
+			"codex_7d_reset_at":     past.Format(time.RFC3339),
+		}), want: true},
+		{name: "quota below full", account: accountWithExtra(map[string]any{
+			"codex_7d_used_percent": 99.9,
+			"codex_7d_reset_at":     future.Format(time.RFC3339),
+		}), want: true},
+		{name: "fresh full quota without reset", account: accountWithExtra(map[string]any{
+			"codex_5h_used_percent":  100.0,
+			"codex_usage_updated_at": fresh.Format(time.RFC3339),
+		}), want: false},
+		{name: "stale full quota without reset self heals", account: accountWithExtra(map[string]any{
+			"codex_5h_used_percent":  100.0,
+			"codex_usage_updated_at": stale.Format(time.RFC3339),
+		}), want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, openAICodexTicketProbeEligible(tt.account, now))
+		})
+	}
+}
+
+func TestRefreshOpenAICodexTickets_SkipsIneligibleAccounts(t *testing.T) {
+	now := time.Now()
+	active := ticketTestAccount(41)
+	disabled := ticketTestAccount(42)
+	disabled.Schedulable = false
+	exhausted := ticketTestAccount(43)
+	exhausted.Extra = map[string]any{
+		"codex_7d_used_percent": 100.0,
+		"codex_7d_reset_at":     now.Add(time.Hour).Format(time.RFC3339),
+	}
+
+	repo := &codexTicketRefreshRepo{accounts: []Account{*active, *disabled, *exhausted}}
+	var calls atomic.Int64
+	upstream := &codexTicketFuncUpstream{do: func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return codexTicketResponse(), nil
+	}}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled:         true,
+		HarvestProxyURL: "socks5h://proxy.example.com:1080",
+		Models:          []string{"gpt-6-astra"},
+	}, upstream)
+	svc.accountRepo = repo
+
+	svc.refreshOpenAICodexTickets(context.Background())
+
+	require.Equal(t, int64(1), calls.Load())
+	require.NotNil(t, svc.lookupOpenAICodexTicket(active, "gpt-6-astra"))
+	require.Nil(t, svc.lookupOpenAICodexTicket(disabled, "gpt-6-astra"))
+	require.Nil(t, svc.lookupOpenAICodexTicket(exhausted, "gpt-6-astra"))
+}
+
 func TestOpenAICodexTicketStatuses_RespectRuntimeConfiguration(t *testing.T) {
 	account := ticketTestAccount(41)
 	require.Empty(t, OpenAICodexTicketStatuses(account, config.OpenAICodexTicketConfig{}, time.Now()))
