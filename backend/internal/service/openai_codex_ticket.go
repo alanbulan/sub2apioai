@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -194,7 +195,7 @@ func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailureWithPolicy(key
 		}
 	}
 	steps := openAICodexTicketProbeBackoffSteps[:]
-	if useSessionRetry && openAICodexTicketProxyUsesSessions(proxyURL) {
+	if useSessionRetry {
 		steps = openAICodexTicketSessionProbeBackoffSteps[:]
 	}
 	step := failures - 1
@@ -254,6 +255,59 @@ func (s *OpenAIGatewayService) openAICodexTicketConfig() config.OpenAICodexTicke
 		cfg.Models = []string{openAICodexTicketDefaultModel, openAICodexTicketDefaultSolModel}
 	}
 	return cfg
+}
+
+func (s *OpenAIGatewayService) openAICodexTicketProxyRotateURL() string {
+	raw := strings.TrimSpace(s.openAICodexTicketConfig().HarvestProxyRotateURL)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return ""
+	}
+	return raw
+}
+
+func (s *OpenAIGatewayService) openAICodexTicketCanRotateFixedProxy(proxyTemplate string) bool {
+	return s != nil && s.httpUpstream != nil && !openAICodexTicketProxyUsesSessions(proxyTemplate) && s.openAICodexTicketProxyRotateURL() != ""
+}
+
+// rotateOpenAICodexTicketFixedProxy asks a fixed-proxy provider to change its
+// shared exit. It runs only after all probes in a cycle have completed, so one
+// model cannot change the IP underneath another model's in-flight request.
+func (s *OpenAIGatewayService) rotateOpenAICodexTicketFixedProxy(ctx context.Context, proxyTemplate string) (int, error) {
+	rotateURL := s.openAICodexTicketProxyRotateURL()
+	if rotateURL == "" || !s.openAICodexTicketCanRotateFixedProxy(proxyTemplate) {
+		return 0, errors.New("fixed proxy rotation is not configured")
+	}
+	currentProxy := s.openAICodexTicketHarvestProxyURLContext(ctx)
+	if openAICodexTicketProxyFingerprint(currentProxy) != openAICodexTicketProxyFingerprint(proxyTemplate) {
+		return 0, errors.New("harvest proxy changed before rotation")
+	}
+
+	rotateCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(rotateCtx, http.MethodGet, rotateURL, nil)
+	if err != nil {
+		return 0, err
+	}
+	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAIHarvest))
+	req.Close = true
+	resp, err := s.httpUpstream.Do(req, proxyTemplate, 0, 1)
+	if err != nil {
+		return 0, err
+	}
+	if resp == nil {
+		return 0, errors.New("nil proxy rotation response")
+	}
+	if resp.Body != nil {
+		defer resp.Body.Close()
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return resp.StatusCode, fmt.Errorf("proxy rotation returned HTTP %d", resp.StatusCode)
+	}
+	return resp.StatusCode, nil
 }
 
 func (s *OpenAIGatewayService) openAICodexTicketGatedModel(model string) bool {
@@ -673,6 +727,7 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 	now := time.Now()
 	refreshBefore := time.Duration(cfg.RefreshBeforeSeconds) * time.Second
 	var wg sync.WaitGroup
+	var rotateFixedProxy atomic.Bool
 	probed := 0
 	for i := range accounts {
 		account := accounts[i]
@@ -705,11 +760,22 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 			wg.Add(1)
 			go func(acc Account, model string) {
 				defer wg.Done()
-				s.probeOnceOpenAICodexTicket(ctx, &acc, model)
+				if s.probeOnceOpenAICodexTicket(ctx, &acc, model) {
+					rotateFixedProxy.Store(true)
+				}
 			}(acc, model)
 		}
 	}
 	wg.Wait()
+	if rotateFixedProxy.Load() {
+		status, rotateErr := s.rotateOpenAICodexTicketFixedProxy(ctx, proxyTemplate)
+		if rotateErr != nil {
+			logger.L().Warn("openai_codex_ticket proxy rotation failed",
+				zap.Int("http", status), zap.Error(rotateErr))
+		} else {
+			logger.L().Info("openai_codex_ticket proxy rotated", zap.Int("http", status))
+		}
+	}
 	if probed > 0 {
 		logger.L().Info("openai_codex_ticket probe cycle", zap.Int("probed", probed))
 	}
@@ -718,17 +784,17 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 // probeOnceOpenAICodexTicket 走打票代理打一发。命中合格 292（HTTP 200、长度==target、
 // gAAAAA 前缀）就落库；否则记 Info miss，交给下个周期重试。同一 key 并发去重，避免上一发还没
 // 回来又叠一发。
-func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, account *Account, model string) {
+func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, account *Account, model string) bool {
 	if s == nil || !openAICodexTicketProbeEligible(account, time.Now()) || ctx.Err() != nil || !s.openAICodexTicketEnabledContext(ctx) {
-		return
+		return false
 	}
 	cfg := s.openAICodexTicketConfig()
 	proxyTemplate := s.openAICodexTicketHarvestProxyURLContext(ctx)
 	if proxyTemplate == "" || s.httpUpstream == nil || ctx.Err() != nil {
-		return
+		return false
 	}
 	key := openAICodexTicketKey(account.ID, model)
-	_, _, _ = s.openaiCodexTicketFlight.Do(key, func() (any, error) {
+	result, _, _ := s.openaiCodexTicketFlight.Do(key, func() (any, error) {
 		proxyURL := s.openAICodexTicketProbeProxyURL(key, proxyTemplate)
 		token, _, err := s.GetAccessToken(ctx, account)
 		if err != nil || strings.TrimSpace(token) == "" {
@@ -737,34 +803,40 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.String("reason", "token"), zap.Error(err),
 				zap.Int("failures", backoff.Failures), zap.Int64("retry_in_seconds", int64(time.Until(backoff.RetryAt)/time.Second)))
-			return nil, nil
+			return false, nil
 		}
 		state, status, perr := s.fireOpenAICodexTicketProbe(ctx, account, token, model, proxyURL, time.Duration(cfg.HarvestAttemptTimeoutSeconds)*time.Second)
 		if perr != nil {
 			rotations := s.rotateOpenAICodexTicketProxySession(key, proxyTemplate)
-			backoff := s.recordOpenAICodexTicketProbeMiss(account, model, key, proxyTemplate, cfg.TargetLength, rotations > 0)
+			rotateFixedProxy := rotations == 0 && s.openAICodexTicketCanRotateFixedProxy(proxyTemplate)
+			backoff := s.recordOpenAICodexTicketProbeMiss(account, model, key, proxyTemplate, cfg.TargetLength, rotations > 0 || rotateFixedProxy)
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.String("reason", "error"), zap.Error(perr),
 				zap.Bool("proxy_session_rotated", rotations > 0), zap.Int("proxy_session_rotations", rotations),
+				zap.Bool("proxy_rotation_requested", rotateFixedProxy),
 				zap.Int("failures", backoff.Failures), zap.Int64("retry_in_seconds", int64(time.Until(backoff.RetryAt)/time.Second)))
-			return nil, nil
+			return rotateFixedProxy, nil
 		}
 		if status != http.StatusOK || state == "" || len(state) != cfg.TargetLength || !strings.HasPrefix(state, openAICodexTicketStatePrefix) {
 			rotations := 0
+			rotateFixedProxy := false
 			// A 200 response with the wrong turn-state is the observed signal for
-			// an unsuitable egress IP. Non-200 responses are normally account or
-			// request failures; changing IPs for those only wastes proxy traffic.
-			if status == http.StatusOK {
+			// an unsuitable egress IP. A 403 is also exit-specific for providers
+			// with an explicit rotate endpoint. HTTP 400 remains an account/request
+			// failure and must not consume a new proxy exit.
+			if status == http.StatusOK || status == http.StatusForbidden {
 				rotations = s.rotateOpenAICodexTicketProxySession(key, proxyTemplate)
+				rotateFixedProxy = rotations == 0 && s.openAICodexTicketCanRotateFixedProxy(proxyTemplate)
 			}
-			backoff := s.recordOpenAICodexTicketProbeMiss(account, model, key, proxyTemplate, cfg.TargetLength, rotations > 0)
+			backoff := s.recordOpenAICodexTicketProbeMiss(account, model, key, proxyTemplate, cfg.TargetLength, rotations > 0 || rotateFixedProxy)
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.Int("http", status), zap.Int("len", len(state)),
 				zap.Bool("proxy_session_rotated", rotations > 0), zap.Int("proxy_session_rotations", rotations),
+				zap.Bool("proxy_rotation_requested", rotateFixedProxy),
 				zap.Int("failures", backoff.Failures), zap.Int64("retry_in_seconds", int64(time.Until(backoff.RetryAt)/time.Second)))
-			return nil, nil
+			return rotateFixedProxy, nil
 		}
 		s.openaiCodexTicketProbeBackoffs.Delete(key)
 		s.markOpenAICodexTicketProxySessionSuccessful(key, proxyTemplate)
@@ -782,8 +854,10 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 		logger.L().Info("openai_codex_ticket harvested",
 			zap.Int64("account_id", account.ID), zap.String("model", model),
 			zap.Int("length", ticket.Length), zap.String("mode", "continuous"))
-		return nil, nil
+		return false, nil
 	})
+	rotateFixedProxy, _ := result.(bool)
+	return rotateFixedProxy
 }
 
 func openAICodexTicketProbeEligible(account *Account, now time.Time) bool {

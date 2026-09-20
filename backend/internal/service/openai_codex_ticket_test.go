@@ -62,6 +62,39 @@ func (u *codexTicketProxySequenceUpstream) Do(_ *http.Request, proxyURL string, 
 	return &http.Response{StatusCode: status, Header: h, Body: io.NopCloser(strings.NewReader(""))}, nil
 }
 
+type codexTicketRotatableProxyUpstream struct {
+	HTTPUpstream
+	mu                       sync.Mutex
+	probeStatus              int
+	probeLength              int
+	probeCalls               int
+	rotateCalls              int
+	expectedProbesAtRotation int
+	rotatedAfterAllProbes    bool
+	proxyURLs                []string
+}
+
+func (u *codexTicketRotatableProxyUpstream) Do(req *http.Request, proxyURL string, _ int64, _ int) (*http.Response, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.proxyURLs = append(u.proxyURLs, proxyURL)
+	if req.URL.Host == "rotate.example" {
+		u.rotateCalls++
+		u.rotatedAfterAllProbes = u.probeCalls == u.expectedProbesAtRotation
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
+	}
+	u.probeCalls++
+	status := u.probeStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	h := http.Header{}
+	if u.probeLength > 0 {
+		h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(u.probeLength))
+	}
+	return &http.Response{StatusCode: status, Header: h, Body: io.NopCloser(strings.NewReader(""))}, nil
+}
+
 func TestApplyOpenAICodexTicket_ReplacesHeader(t *testing.T) {
 	state := fakeCodexTicketState(292)
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
@@ -542,6 +575,80 @@ func TestOpenAICodexTicketProbeDoesNotRotateSessionOnHTTP400(t *testing.T) {
 	backoff := raw.(openAICodexTicketProbeBackoff)
 	require.Equal(t, 2, backoff.Failures)
 	require.Greater(t, time.Until(backoff.RetryAt), 9*time.Minute)
+}
+
+func TestRefreshOpenAICodexTicketsRotatesFixedProxyOnceAfterConcurrentMisses(t *testing.T) {
+	account := ticketTestAccount(41)
+	repo := &codexTicketRefreshRepo{accounts: []Account{*account}}
+	upstream := &codexTicketRotatableProxyUpstream{
+		probeLength:              312,
+		expectedProbesAtRotation: 2,
+	}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled:               true,
+		HarvestProxyURL:       "http://fixed-proxy.example:8080",
+		HarvestProxyRotateURL: "http://rotate.example/change",
+		Models:                []string{"gpt-6-astra", "gpt-5.6-sol"},
+	}, upstream)
+	svc.accountRepo = repo
+
+	svc.refreshOpenAICodexTickets(context.Background())
+
+	require.Equal(t, 2, upstream.probeCalls)
+	require.Equal(t, 1, upstream.rotateCalls)
+	require.True(t, upstream.rotatedAfterAllProbes)
+	require.Equal(t, []string{
+		"http://fixed-proxy.example:8080",
+		"http://fixed-proxy.example:8080",
+		"http://fixed-proxy.example:8080",
+	}, upstream.proxyURLs)
+	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol"} {
+		raw, ok := svc.openaiCodexTicketProbeBackoffs.Load(openAICodexTicketKey(account.ID, model))
+		require.True(t, ok)
+		require.Less(t, time.Until(raw.(openAICodexTicketProbeBackoff).RetryAt), 4*time.Minute)
+	}
+}
+
+func TestRefreshOpenAICodexTicketsRotatesFixedProxyOnHTTP403(t *testing.T) {
+	account := ticketTestAccount(41)
+	repo := &codexTicketRefreshRepo{accounts: []Account{*account}}
+	upstream := &codexTicketRotatableProxyUpstream{
+		probeStatus:              http.StatusForbidden,
+		expectedProbesAtRotation: 1,
+	}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled:               true,
+		HarvestProxyURL:       "http://fixed-proxy.example:8080",
+		HarvestProxyRotateURL: "http://rotate.example/change",
+		Models:                []string{"gpt-6-astra"},
+	}, upstream)
+	svc.accountRepo = repo
+
+	svc.refreshOpenAICodexTickets(context.Background())
+
+	require.Equal(t, 1, upstream.probeCalls)
+	require.Equal(t, 1, upstream.rotateCalls)
+}
+
+func TestRefreshOpenAICodexTicketsDoesNotRotateFixedProxyOnHTTP400(t *testing.T) {
+	account := ticketTestAccount(41)
+	repo := &codexTicketRefreshRepo{accounts: []Account{*account}}
+	upstream := &codexTicketRotatableProxyUpstream{probeStatus: http.StatusBadRequest}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled:               true,
+		HarvestProxyURL:       "http://fixed-proxy.example:8080",
+		HarvestProxyRotateURL: "http://rotate.example/change",
+		Models:                []string{"gpt-6-astra"},
+	}, upstream)
+	svc.accountRepo = repo
+
+	svc.refreshOpenAICodexTickets(context.Background())
+
+	require.Equal(t, 1, upstream.probeCalls)
+	require.Zero(t, upstream.rotateCalls)
+	raw, ok := svc.openaiCodexTicketProbeBackoffs.Load(openAICodexTicketKey(account.ID, "gpt-6-astra"))
+	require.True(t, ok)
+	require.Greater(t, time.Until(raw.(openAICodexTicketProbeBackoff).RetryAt), 4*time.Minute)
 }
 
 func TestOpenAICodexTicketProbeBackoffPreservesFinalPreExpiryAttempt(t *testing.T) {

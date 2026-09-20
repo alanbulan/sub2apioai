@@ -332,6 +332,10 @@ gateway:
     # 后台值的读取缓存为 5 秒。在服务商的会话位置放 __SESSION__，系统会
     # 为每个账号/模型使用独立粘性会话，并在受控退避内自动换出口。
     harvest_proxy_url: ""
+    # 固定代理可选：服务商提供的换 IP 地址。仅在网络错误、HTTP 403 或
+    # HTTP 200 但未返回 292 时调用；所有并发探测结束后每轮最多调用一次。
+    # 请求通过 harvest_proxy_url 发出。留空表示不调用外部换 IP 接口。
+    harvest_proxy_rotate_url: ""
     harvest_probe_interval_seconds: 6
     harvest_attempt_timeout_seconds: 25
     fail_closed: true
