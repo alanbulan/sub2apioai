@@ -44,16 +44,22 @@ func ticketTestService(t *testing.T, cfg config.OpenAICodexTicketConfig, upstrea
 
 type codexTicketProxySequenceUpstream struct {
 	HTTPUpstream
-	proxies []string
-	lengths []int
+	proxies  []string
+	lengths  []int
+	statuses []int
 }
 
 func (u *codexTicketProxySequenceUpstream) Do(_ *http.Request, proxyURL string, _ int64, _ int) (*http.Response, error) {
 	u.proxies = append(u.proxies, proxyURL)
-	length := u.lengths[len(u.proxies)-1]
+	index := len(u.proxies) - 1
+	length := u.lengths[index]
+	status := http.StatusOK
+	if len(u.statuses) > index {
+		status = u.statuses[index]
+	}
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(length))
-	return &http.Response{StatusCode: http.StatusOK, Header: h, Body: io.NopCloser(strings.NewReader(""))}, nil
+	return &http.Response{StatusCode: status, Header: h, Body: io.NopCloser(strings.NewReader(""))}, nil
 }
 
 func TestApplyOpenAICodexTicket_ReplacesHeader(t *testing.T) {
@@ -510,6 +516,32 @@ func TestOpenAICodexTicketProbeRotatesTemplatedProxyAndRetainsSuccess(t *testing
 	}
 	require.NotEqual(t, upstream.proxies[0], upstream.proxies[1])
 	require.Equal(t, upstream.proxies[1], upstream.proxies[2])
+}
+
+func TestOpenAICodexTicketProbeDoesNotRotateSessionOnHTTP400(t *testing.T) {
+	template := "http://customer_90_" + openAICodexTicketProxySessionPlaceholder + ":secret@proxy.example:8080"
+	upstream := &codexTicketProxySequenceUpstream{
+		lengths:  []int{0, 0},
+		statuses: []int{http.StatusBadRequest, http.StatusBadRequest},
+	}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled:         true,
+		HarvestProxyURL: template,
+		Models:          []string{"gpt-6-astra"},
+	}, upstream)
+	account := ticketTestAccount(41)
+	key := openAICodexTicketKey(account.ID, "gpt-6-astra")
+
+	svc.probeOnceOpenAICodexTicket(context.Background(), account, "gpt-6-astra")
+	svc.probeOnceOpenAICodexTicket(context.Background(), account, "gpt-6-astra")
+
+	require.Len(t, upstream.proxies, 2)
+	require.Equal(t, []string{upstream.proxies[0], upstream.proxies[0]}, upstream.proxies)
+	raw, ok := svc.openaiCodexTicketProbeBackoffs.Load(key)
+	require.True(t, ok)
+	backoff := raw.(openAICodexTicketProbeBackoff)
+	require.Equal(t, 2, backoff.Failures)
+	require.Greater(t, time.Until(backoff.RetryAt), 9*time.Minute)
 }
 
 func TestOpenAICodexTicketProbeBackoffPreservesFinalPreExpiryAttempt(t *testing.T) {

@@ -182,6 +182,10 @@ func (s *OpenAIGatewayService) openAICodexTicketProbeBackedOff(key, proxyURL str
 }
 
 func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailure(key, proxyURL string, now, retryDeadline time.Time) openAICodexTicketProbeBackoff {
+	return s.recordOpenAICodexTicketProbeFailureWithPolicy(key, proxyURL, now, retryDeadline, openAICodexTicketProxyUsesSessions(proxyURL))
+}
+
+func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailureWithPolicy(key, proxyURL string, now, retryDeadline time.Time, useSessionRetry bool) openAICodexTicketProbeBackoff {
 	fingerprint := openAICodexTicketProxyFingerprint(proxyURL)
 	failures := 1
 	if raw, ok := s.openaiCodexTicketProbeBackoffs.Load(key); ok {
@@ -190,7 +194,7 @@ func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailure(key, proxyURL
 		}
 	}
 	steps := openAICodexTicketProbeBackoffSteps[:]
-	if openAICodexTicketProxyUsesSessions(proxyURL) {
+	if useSessionRetry && openAICodexTicketProxyUsesSessions(proxyURL) {
 		steps = openAICodexTicketSessionProbeBackoffSteps[:]
 	}
 	step := failures - 1
@@ -210,7 +214,7 @@ func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailure(key, proxyURL
 	return state
 }
 
-func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeMiss(account *Account, model, key, proxyURL string, targetLen int) openAICodexTicketProbeBackoff {
+func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeMiss(account *Account, model, key, proxyURL string, targetLen int, useSessionRetry bool) openAICodexTicketProbeBackoff {
 	now := time.Now()
 	retryDeadline := time.Time{}
 	if ticket := s.lookupOpenAICodexTicket(account, model); ticket.valid(now, targetLen) {
@@ -219,7 +223,7 @@ func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeMiss(account *Account
 			retryDeadline = candidate
 		}
 	}
-	return s.recordOpenAICodexTicketProbeFailure(key, proxyURL, now, retryDeadline)
+	return s.recordOpenAICodexTicketProbeFailureWithPolicy(key, proxyURL, now, retryDeadline, useSessionRetry)
 }
 
 func extractOpenAICodexTicketModel(body []byte) string {
@@ -728,7 +732,7 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 		proxyURL := s.openAICodexTicketProbeProxyURL(key, proxyTemplate)
 		token, _, err := s.GetAccessToken(ctx, account)
 		if err != nil || strings.TrimSpace(token) == "" {
-			backoff := s.recordOpenAICodexTicketProbeMiss(account, model, key, proxyTemplate, cfg.TargetLength)
+			backoff := s.recordOpenAICodexTicketProbeMiss(account, model, key, proxyTemplate, cfg.TargetLength, false)
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.String("reason", "token"), zap.Error(err),
@@ -738,7 +742,7 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 		state, status, perr := s.fireOpenAICodexTicketProbe(ctx, account, token, model, proxyURL, time.Duration(cfg.HarvestAttemptTimeoutSeconds)*time.Second)
 		if perr != nil {
 			rotations := s.rotateOpenAICodexTicketProxySession(key, proxyTemplate)
-			backoff := s.recordOpenAICodexTicketProbeMiss(account, model, key, proxyTemplate, cfg.TargetLength)
+			backoff := s.recordOpenAICodexTicketProbeMiss(account, model, key, proxyTemplate, cfg.TargetLength, rotations > 0)
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.String("reason", "error"), zap.Error(perr),
@@ -747,8 +751,14 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 			return nil, nil
 		}
 		if status != http.StatusOK || state == "" || len(state) != cfg.TargetLength || !strings.HasPrefix(state, openAICodexTicketStatePrefix) {
-			rotations := s.rotateOpenAICodexTicketProxySession(key, proxyTemplate)
-			backoff := s.recordOpenAICodexTicketProbeMiss(account, model, key, proxyTemplate, cfg.TargetLength)
+			rotations := 0
+			// A 200 response with the wrong turn-state is the observed signal for
+			// an unsuitable egress IP. Non-200 responses are normally account or
+			// request failures; changing IPs for those only wastes proxy traffic.
+			if status == http.StatusOK {
+				rotations = s.rotateOpenAICodexTicketProxySession(key, proxyTemplate)
+			}
+			backoff := s.recordOpenAICodexTicketProbeMiss(account, model, key, proxyTemplate, cfg.TargetLength, rotations > 0)
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.Int("http", status), zap.Int("len", len(state)),
