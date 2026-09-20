@@ -49,7 +49,15 @@ type codexTicketProxySequenceUpstream struct {
 	statuses []int
 }
 
-func (u *codexTicketProxySequenceUpstream) Do(_ *http.Request, proxyURL string, _ int64, _ int) (*http.Response, error) {
+func codexTicketProbeModelFromRequest(req *http.Request) string {
+	if req == nil || req.Body == nil {
+		return ""
+	}
+	body, _ := io.ReadAll(req.Body)
+	return extractOpenAICodexTicketModel(body)
+}
+
+func (u *codexTicketProxySequenceUpstream) Do(req *http.Request, proxyURL string, _ int64, _ int) (*http.Response, error) {
 	u.proxies = append(u.proxies, proxyURL)
 	index := len(u.proxies) - 1
 	length := u.lengths[index]
@@ -59,7 +67,7 @@ func (u *codexTicketProxySequenceUpstream) Do(_ *http.Request, proxyURL string, 
 	}
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(length))
-	return &http.Response{StatusCode: status, Header: h, Body: io.NopCloser(strings.NewReader(""))}, nil
+	return &http.Response{StatusCode: status, Header: h, Body: io.NopCloser(strings.NewReader(codexTicketProbeSuccessSSE(codexTicketProbeModelFromRequest(req))))}, nil
 }
 
 type codexTicketRotatableProxyUpstream struct {
@@ -92,7 +100,7 @@ func (u *codexTicketRotatableProxyUpstream) Do(req *http.Request, proxyURL strin
 	if u.probeLength > 0 {
 		h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(u.probeLength))
 	}
-	return &http.Response{StatusCode: status, Header: h, Body: io.NopCloser(strings.NewReader(""))}, nil
+	return &http.Response{StatusCode: status, Header: h, Body: io.NopCloser(strings.NewReader(codexTicketProbeSuccessSSE(codexTicketProbeModelFromRequest(req))))}, nil
 }
 
 func TestApplyOpenAICodexTicket_ReplacesHeader(t *testing.T) {
@@ -267,7 +275,7 @@ func TestHarvestOpenAICodexTicket_StopsAt292AndUsesHarvestProxy(t *testing.T) {
 			{
 				StatusCode: http.StatusOK,
 				Header:     header292,
-				Body:       io.NopCloser(strings.NewReader("data: {}\n\n")),
+				Body:       io.NopCloser(strings.NewReader(codexTicketProbeSuccessSSE("gpt-6-astra"))),
 			},
 		},
 	}
@@ -313,7 +321,7 @@ func TestHarvestOpenAICodexTicket_HTTP503DoesNotAbortHunt(t *testing.T) {
 	responses = append(responses, &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     header292,
-		Body:       io.NopCloser(strings.NewReader("data: {}\n\n")),
+		Body:       io.NopCloser(strings.NewReader(codexTicketProbeSuccessSSE("gpt-6-astra"))),
 	})
 	upstream := &httpUpstreamRecorder{responses: responses}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
@@ -375,6 +383,30 @@ func TestOpenAICodexTicketStatuses_ReportsRemainingTTL(t *testing.T) {
 	require.False(t, got[1].Ready)
 }
 
+func TestOpenAICodexTicketStatuses_ReportLastProbeDiagnostic(t *testing.T) {
+	cfg := config.OpenAICodexTicketConfig{
+		Enabled:         true,
+		FailClosed:      true,
+		HarvestProxyURL: "http://proxy.example:8080",
+		Models:          []string{"gpt-6-astra"},
+	}
+	svc := ticketTestService(t, cfg, nil)
+	account := ticketTestAccount(41)
+	settings := svc.openAICodexTicketRuntimeSettingsContext(context.Background())
+	key := openAICodexTicketKey(account.ID, "gpt-6-astra")
+	svc.recordOpenAICodexTicketProbeDiagnostic(
+		account, "gpt-6-astra", key, settings,
+		openAICodexTicketProbeModelMismatch, http.StatusOK, 292, "gpt-5.6-luna",
+	)
+
+	status := svc.OpenAICodexTicketStatuses(account, cfg, time.Now())
+	require.Len(t, status, 1)
+	require.Equal(t, string(openAICodexTicketProbeModelMismatch), status[0].LastProbeReason)
+	require.Equal(t, http.StatusOK, status[0].LastProbeHTTPStatus)
+	require.Equal(t, 292, status[0].LastProbeStateLength)
+	require.Equal(t, "gpt-5.6-luna", status[0].LastProbeServedModel)
+}
+
 func TestExtractOpenAICodexTicketModel(t *testing.T) {
 	require.Equal(t, "gpt-6-astra", extractOpenAICodexTicketModel([]byte(`{"model":"gpt-6-astra"}`)))
 	require.Empty(t, extractOpenAICodexTicketModel([]byte(`{}`)))
@@ -421,7 +453,7 @@ func (u *codexTicketConcurrentUpstream) Do(req *http.Request, _ string, _ int64,
 	}
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
-	return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))}, nil
+	return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader(codexTicketProbeSuccessSSE(codexTicketProbeModelFromRequest(req))))}, nil
 }
 func TestRefreshOpenAICodexTickets_ConcurrentModelsPreserveAccountSnapshot(t *testing.T) {
 	account := ticketTestAccount(41)

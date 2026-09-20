@@ -1167,6 +1167,10 @@ export interface OpenAICodexTurnTicketStatus {
   probing?: boolean
   manual_retry_allowed?: boolean
   manual_retry_in_seconds?: number
+  last_probe_reason?: string
+  last_probe_http_status?: number
+  last_probe_state_length?: number
+  last_probe_served_model?: string
 }
 
 export interface Account {

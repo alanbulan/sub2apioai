@@ -126,7 +126,11 @@
         >
           <span class="truncate font-medium text-gray-500 dark:text-gray-400" :title="ticket.model">{{ shortCodexTicketModel(ticket.model) }}</span>
           <span v-if="ticket.ready" class="text-emerald-600 dark:text-emerald-400">{{ formatCodexTicketRemaining(ticket.remaining_seconds) }}</span>
-          <span v-else-if="ticket.blocked" class="text-amber-600 dark:text-amber-400">{{ t('admin.accounts.openai.codexTurnTicketPaused') }}</span>
+          <span
+            v-else-if="ticket.blocked"
+            class="min-w-0 truncate text-amber-600 dark:text-amber-400"
+            :title="codexTicketPauseLabel(ticket)"
+          >{{ codexTicketPauseLabel(ticket) }}</span>
           <span v-else class="text-gray-500">{{ t('admin.accounts.openai.codexTurnTicketMissing') }}</span>
           <CodexTicketRetryButton
             v-if="ticket.blocked"
@@ -670,7 +674,8 @@
 import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
-import type { Account, AccountUsageInfo, GeminiCredentials, WindowStats } from '@/types'
+import type { Account, AccountUsageInfo, GeminiCredentials, OpenAICodexTurnTicketStatus, WindowStats } from '@/types'
+import { codexTicketPauseMessage } from '@/utils/codexTicket'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
@@ -809,6 +814,11 @@ const hasOpenAIUsageFallback = computed(() => {
 })
 
 const codexTurnTickets = computed(() => props.account.codex_turn_tickets ?? [])
+
+function codexTicketPauseLabel(ticket: OpenAICodexTurnTicketStatus) {
+  const message = codexTicketPauseMessage(ticket)
+  return t(message.key, message.params ?? {})
+}
 
 function shortCodexTicketModel(model: string) {
   if (model === 'gpt-6-astra') return 'astra'

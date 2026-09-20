@@ -23,10 +23,18 @@ type codexTicketFuncUpstream struct {
 func (u *codexTicketFuncUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
 	return u.do(req)
 }
+
+func codexTicketProbeSuccessSSE(model string) string {
+	return "event: response.created\n" +
+		`data: {"type":"response.created","response":{"model":` + jsonString(model) + `}}` + "\n\n" +
+		"event: response.output_text.delta\n" +
+		`data: {"type":"response.output_text.delta","delta":"pong"}` + "\n\n"
+}
+
 func codexTicketResponse() *http.Response {
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
-	return &http.Response{StatusCode: http.StatusOK, Header: h, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))}
+	return &http.Response{StatusCode: http.StatusOK, Header: h, Body: io.NopCloser(strings.NewReader(codexTicketProbeSuccessSSE("gpt-6-astra")))}
 }
 
 func TestCodexTicketProbeBypassesPluginDuringWiring(t *testing.T) {
@@ -59,10 +67,11 @@ func TestCodexTicketProbeBypassesPluginDuringWiring(t *testing.T) {
 	}()
 	close(start)
 	for i := 0; i < 20; i++ {
-		state, status, err := svc.fireOpenAICodexTicketProbe(context.Background(), account, "test-token", "gpt-6-astra", "http://proxy.example.com:8080", time.Second)
+		result, err := svc.fireOpenAICodexTicketProbe(context.Background(), account, "test-token", "gpt-6-astra", "http://proxy.example.com:8080", time.Second)
 		require.NoError(t, err)
-		require.Equal(t, http.StatusOK, status)
-		require.Len(t, state, 292)
+		require.Equal(t, http.StatusOK, result.Status)
+		require.Len(t, result.State, 292)
+		require.Equal(t, openAICodexTicketProbeVerified, result.Verdict)
 	}
 	wg.Wait()
 	require.Equal(t, int64(20), calls.Load())
@@ -183,17 +192,87 @@ type codexTicketHeaderOnlyBody struct{ reads, closes int }
 
 func (b *codexTicketHeaderOnlyBody) Read([]byte) (int, error) { b.reads++; return 0, io.EOF }
 func (b *codexTicketHeaderOnlyBody) Close() error             { b.closes++; return nil }
-func TestCodexTicketProbeClosesStreamWithoutDraining(t *testing.T) {
+func TestCodexTicketProbeDoesNotReadStreamForObviousLengthMiss(t *testing.T) {
 	body := &codexTicketHeaderOnlyBody{}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{}, &codexTicketFuncUpstream{do: func(*http.Request) (*http.Response, error) {
 		response := codexTicketResponse()
+		response.Header.Set(openAICodexTurnStateHeader, fakeCodexTicketState(312))
 		response.Body = body
 		return response, nil
 	}})
-	_, _, err := svc.fireOpenAICodexTicketProbe(context.Background(), ticketTestAccount(41), "test-token", "gpt-6-astra", "", time.Second)
+	result, err := svc.fireOpenAICodexTicketProbe(context.Background(), ticketTestAccount(41), "test-token", "gpt-6-astra", "", time.Second)
 	require.NoError(t, err)
+	require.Equal(t, openAICodexTicketProbeLengthMismatch, result.Verdict)
 	require.Zero(t, body.reads)
 	require.Equal(t, 1, body.closes)
+}
+
+func TestCodexTicketProbeRequiresVerifiedTargetModelOutput(t *testing.T) {
+	tests := []struct {
+		name        string
+		stream      string
+		wantVerdict openAICodexTicketProbeVerdict
+		wantModel   string
+	}{
+		{
+			name:        "matching model with output",
+			stream:      codexTicketProbeSuccessSSE("gpt-6-astra"),
+			wantVerdict: openAICodexTicketProbeVerified,
+			wantModel:   "gpt-6-astra",
+		},
+		{
+			name:        "matching completed response",
+			stream:      "data: " + `{"type":"response.completed","response":{"status":"completed","model":"gpt-6-astra"}}` + "\n\n",
+			wantVerdict: openAICodexTicketProbeVerified,
+			wantModel:   "gpt-6-astra",
+		},
+		{
+			name:        "different served model",
+			stream:      codexTicketProbeSuccessSSE("gpt-5.6-luna"),
+			wantVerdict: openAICodexTicketProbeModelMismatch,
+			wantModel:   "gpt-5.6-luna",
+		},
+		{
+			name:        "output without model declaration",
+			stream:      "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n",
+			wantVerdict: openAICodexTicketProbeModelUnverified,
+		},
+		{
+			name: "stream overload",
+			stream: "event: error\ndata: " +
+				`{"type":"error","error":{"code":"server_is_overloaded","message":"try later"}}` + "\n\n",
+			wantVerdict: openAICodexTicketProbeOverloaded,
+		},
+		{
+			name: "stream failure",
+			stream: "event: response.failed\ndata: " +
+				`{"type":"response.failed","response":{"model":"gpt-6-astra","status":"failed","error":{"code":"server_error"}}}` + "\n\n",
+			wantVerdict: openAICodexTicketProbeUpstreamFailed,
+			wantModel:   "gpt-6-astra",
+		},
+		{
+			name:        "stream ends before output",
+			stream:      "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"model\":\"gpt-6-astra\"}}\n\n",
+			wantVerdict: openAICodexTicketProbeIncomplete,
+			wantModel:   "gpt-6-astra",
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			header := http.Header{}
+			header.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
+			result, err := inspectOpenAICodexTicketProbeResponse(&http.Response{
+				StatusCode: http.StatusOK,
+				Header:     header,
+				Body:       io.NopCloser(strings.NewReader(testCase.stream)),
+			}, "gpt-6-astra", 292)
+			require.NoError(t, err)
+			require.Equal(t, testCase.wantVerdict, result.Verdict)
+			require.Equal(t, testCase.wantModel, result.ServedModel)
+			require.Len(t, result.State, 292)
+		})
+	}
 }
 
 func TestCodexTicketPolicyExemptsCredentialShadows(t *testing.T) {

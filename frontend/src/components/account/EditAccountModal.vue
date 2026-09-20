@@ -2268,8 +2268,11 @@
                 {{ t('admin.accounts.openai.codexTurnTicketReady', { time: formatCodexTicketRemaining(ticket.remaining_seconds) }) }}
               </span>
               <template v-else-if="ticket.blocked">
-                <span class="text-amber-600 dark:text-amber-400">
-                  {{ t('admin.accounts.openai.codexTurnTicketPaused') }}
+                <span
+                  class="text-amber-600 dark:text-amber-400"
+                  :title="codexTicketPauseLabel(ticket)"
+                >
+                  {{ codexTicketPauseLabel(ticket) }}
                 </span>
                 <span v-if="ticket.retry_in_seconds" class="text-xs text-gray-500 dark:text-gray-400">
                   {{ t('admin.accounts.openai.codexTurnTicketAutoRetryIn', { time: formatCodexTicketRetryDelay(ticket.retry_in_seconds) }) }}
@@ -3070,10 +3073,12 @@ import type {
   OpenAICompactMode,
   OpenAIResponsesMode,
   OpenAIEndpointCapability,
+  OpenAICodexTurnTicketStatus,
   OllamaCloudUsageState,
   GrokMediaEligibilityMode,
   GrokMediaEligibilityState
 } from '@/types'
+import { codexTicketPauseMessage } from '@/utils/codexTicket'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
@@ -3183,6 +3188,11 @@ const selectableGroups = computed(() => {
 const isSparkShadow = computed(() => props.account?.parent_account_id != null)
 
 const codexTurnTickets = computed(() => props.account?.codex_turn_tickets ?? [])
+
+function codexTicketPauseLabel(ticket: OpenAICodexTurnTicketStatus) {
+  const message = codexTicketPauseMessage(ticket)
+  return t(message.key, message.params ?? {})
+}
 
 function formatCodexTicketRemaining(seconds: number) {
   const total = Math.max(0, Math.floor(seconds || 0))
