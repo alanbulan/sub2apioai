@@ -31,6 +31,11 @@ const (
 	openAICodexTicketDefaultModel    = "gpt-6-astra"
 	openAICodexTicketDefaultSolModel = "gpt-5.6-sol"
 	openAICodexTicketFinalRetryLead  = time.Minute
+	openAICodexTicketMinExpiryRetry  = 15 * time.Second
+	openAICodexTicketMaxExpiryRetry  = time.Minute
+	openAICodexTicketRecoveryWindow  = 30 * time.Minute
+	openAICodexTicketRecoveryRetry   = 3 * time.Minute
+	openAICodexTicketSteadyRetry     = 30 * time.Minute
 
 	// A proxy URL containing this token gets an independent sticky session for
 	// every account/model pair. The token is replaced locally and is never sent
@@ -182,11 +187,11 @@ func (s *OpenAIGatewayService) openAICodexTicketProbeBackedOff(key, proxyURL str
 	return now.Before(state.RetryAt)
 }
 
-func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailure(key, proxyURL string, now, retryDeadline time.Time) openAICodexTicketProbeBackoff {
-	return s.recordOpenAICodexTicketProbeFailureWithPolicy(key, proxyURL, now, retryDeadline, openAICodexTicketProxyUsesSessions(proxyURL))
+func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailure(key, proxyURL string, now, ticketExpiresAt time.Time) openAICodexTicketProbeBackoff {
+	return s.recordOpenAICodexTicketProbeFailureWithPolicy(key, proxyURL, now, ticketExpiresAt, openAICodexTicketProxyUsesSessions(proxyURL))
 }
 
-func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailureWithPolicy(key, proxyURL string, now, retryDeadline time.Time, useSessionRetry bool) openAICodexTicketProbeBackoff {
+func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailureWithPolicy(key, proxyURL string, now, ticketExpiresAt time.Time, useSessionRetry bool) openAICodexTicketProbeBackoff {
 	fingerprint := openAICodexTicketProxyFingerprint(proxyURL)
 	failures := 1
 	if raw, ok := s.openaiCodexTicketProbeBackoffs.Load(key); ok {
@@ -202,10 +207,7 @@ func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailureWithPolicy(key
 	if step >= len(steps) {
 		step = len(steps) - 1
 	}
-	retryAt := now.Add(steps[step])
-	if retryDeadline.After(now) && retryAt.After(retryDeadline) {
-		retryAt = retryDeadline
-	}
+	retryAt := openAICodexTicketProbeRetryAt(now, ticketExpiresAt, steps[step])
 	state := openAICodexTicketProbeBackoff{
 		Failures:         failures,
 		RetryAt:          retryAt,
@@ -215,16 +217,45 @@ func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailureWithPolicy(key
 	return state
 }
 
+// Keep renewal aggressive only around expiry, then return stale tickets to a
+// low-traffic steady-state retry cadence.
+func openAICodexTicketProbeRetryAt(now, ticketExpiresAt time.Time, normalDelay time.Duration) time.Time {
+	if ticketExpiresAt.IsZero() {
+		return now.Add(normalDelay)
+	}
+
+	remaining := ticketExpiresAt.Sub(now)
+	if remaining > openAICodexTicketFinalRetryLead {
+		retryAt := now.Add(normalDelay)
+		finalPreExpiryAttempt := ticketExpiresAt.Add(-openAICodexTicketFinalRetryLead)
+		if retryAt.After(finalPreExpiryAttempt) {
+			return finalPreExpiryAttempt
+		}
+		return retryAt
+	}
+	if remaining > 0 {
+		delay := remaining / 2
+		if delay < openAICodexTicketMinExpiryRetry {
+			delay = openAICodexTicketMinExpiryRetry
+		}
+		if delay > openAICodexTicketMaxExpiryRetry {
+			delay = openAICodexTicketMaxExpiryRetry
+		}
+		return now.Add(delay)
+	}
+	if remaining >= -openAICodexTicketRecoveryWindow {
+		return now.Add(openAICodexTicketRecoveryRetry)
+	}
+	return now.Add(openAICodexTicketSteadyRetry)
+}
+
 func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeMiss(account *Account, model, key, proxyURL string, targetLen int, useSessionRetry bool) openAICodexTicketProbeBackoff {
 	now := time.Now()
-	retryDeadline := time.Time{}
-	if ticket := s.lookupOpenAICodexTicket(account, model); ticket.valid(now, targetLen) {
-		candidate := ticket.ExpiresAt.Add(-openAICodexTicketFinalRetryLead)
-		if candidate.After(now) {
-			retryDeadline = candidate
-		}
+	ticketExpiresAt := time.Time{}
+	if ticket := s.lookupOpenAICodexTicket(account, model); ticket.matches(targetLen) && !ticket.ExpiresAt.IsZero() {
+		ticketExpiresAt = ticket.ExpiresAt
 	}
-	return s.recordOpenAICodexTicketProbeFailureWithPolicy(key, proxyURL, now, retryDeadline, useSessionRetry)
+	return s.recordOpenAICodexTicketProbeFailureWithPolicy(key, proxyURL, now, ticketExpiresAt, useSessionRetry)
 }
 
 func extractOpenAICodexTicketModel(body []byte) string {
@@ -401,17 +432,21 @@ func (s *OpenAIGatewayService) openAICodexTicketHarvestProxyURLContext(ctx conte
 }
 
 func (t *openAICodexTicket) valid(now time.Time, targetLen int) bool {
-	if t == nil {
-		return false
-	}
-	state := strings.TrimSpace(t.State)
-	if len(state) != targetLen || t.Length != targetLen || !strings.HasPrefix(state, openAICodexTicketStatePrefix) {
+	if !t.matches(targetLen) {
 		return false
 	}
 	if t.ExpiresAt.IsZero() || !now.Before(t.ExpiresAt) {
 		return false
 	}
 	return true
+}
+
+func (t *openAICodexTicket) matches(targetLen int) bool {
+	if t == nil {
+		return false
+	}
+	state := strings.TrimSpace(t.State)
+	return len(state) == targetLen && t.Length == targetLen && strings.HasPrefix(state, openAICodexTicketStatePrefix)
 }
 
 func (t *openAICodexTicket) needsRefresh(now time.Time, refreshBefore time.Duration) bool {
