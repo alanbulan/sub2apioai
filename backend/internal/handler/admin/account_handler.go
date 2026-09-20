@@ -39,6 +39,11 @@ type OAuthHandler struct {
 	oauthService *service.OAuthService
 }
 
+type codexTicketGatewayService interface {
+	OpenAICodexTicketStatuses(*service.Account, config.OpenAICodexTicketConfig, time.Time) []service.OpenAICodexTicketStatus
+	RequestOpenAICodexTicketRetry(context.Context, *service.Account, string) (time.Time, error)
+}
+
 // NewOAuthHandler creates a new OAuth handler
 func NewOAuthHandler(oauthService *service.OAuthService) *OAuthHandler {
 	return &OAuthHandler{
@@ -66,6 +71,7 @@ type AccountHandler struct {
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
 	codexTicketSettings     *service.SettingService
+	openaiGatewayService    codexTicketGatewayService
 	cfg                     *config.Config
 }
 
@@ -81,6 +87,11 @@ func (h *AccountHandler) SetOllamaCloudUsageService(usage *service.OllamaCloudUs
 // SetCodexTicketSettings supplies the live policy without mutating shared config.
 func (h *AccountHandler) SetCodexTicketSettings(settings *service.SettingService) {
 	h.codexTicketSettings = settings
+}
+
+// SetOpenAIGatewayService attaches the runtime that owns Codex ticket probes.
+func (h *AccountHandler) SetOpenAIGatewayService(gateway *service.OpenAIGatewayService) {
+	h.openaiGatewayService = gateway
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -368,7 +379,11 @@ func (h *AccountHandler) enrichCodexTicketStatus(account *service.Account, out *
 		if h.codexTicketSettings != nil {
 			cfg.Enabled = h.codexTicketSettings.GetOpenAICodexTicketEnabled(context.Background(), cfg.Enabled)
 		}
-		out.CodexTurnTickets = service.OpenAICodexTicketStatuses(account, cfg, time.Now())
+		if h.openaiGatewayService != nil {
+			out.CodexTurnTickets = h.openaiGatewayService.OpenAICodexTicketStatuses(account, cfg, time.Now())
+		} else {
+			out.CodexTurnTickets = service.OpenAICodexTicketStatuses(account, cfg, time.Now())
+		}
 	}
 }
 
@@ -1342,6 +1357,62 @@ func (h *AccountHandler) RecoverState(c *gin.Context) {
 	}
 
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
+}
+
+type retryCodexTurnTicketRequest struct {
+	Model string `json:"model" binding:"required"`
+}
+
+// RetryCodexTurnTicket starts one controlled, account/model-scoped ticket probe.
+// POST /api/v1/admin/accounts/:id/codex-turn-ticket/retry
+func (h *AccountHandler) RetryCodexTurnTicket(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	var req retryCodexTurnTicketRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if h.openaiGatewayService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Codex ticket service unavailable")
+		return
+	}
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	retryAt, err := h.openaiGatewayService.RequestOpenAICodexTicketRetry(c.Request.Context(), account, req.Model)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrOpenAICodexTicketRetryCooldown):
+			retryAfter := int64(time.Until(retryAt) / time.Second)
+			if retryAfter < 1 {
+				retryAfter = 1
+			}
+			c.Header("Retry-After", strconv.FormatInt(retryAfter, 10))
+			response.Error(c, http.StatusTooManyRequests, err.Error())
+		case errors.Is(err, service.ErrOpenAICodexTicketRetryInvalidModel),
+			errors.Is(err, service.ErrOpenAICodexTicketRetryUnsupported):
+			response.BadRequest(c, err.Error())
+		case errors.Is(err, service.ErrOpenAICodexTicketRetryDisabled),
+			errors.Is(err, service.ErrOpenAICodexTicketRetryIneligible),
+			errors.Is(err, service.ErrOpenAICodexTicketRetryQuotaExhausted),
+			errors.Is(err, service.ErrOpenAICodexTicketRetryNoProxy),
+			errors.Is(err, service.ErrOpenAICodexTicketRetryAlreadyReady),
+			errors.Is(err, service.ErrOpenAICodexTicketRetryInProgress):
+			response.Error(c, http.StatusConflict, err.Error())
+		default:
+			response.InternalError(c, "Failed to start Codex ticket retry")
+		}
+		return
+	}
+
+	response.Accepted(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
 // SyncFromCRS handles syncing accounts from claude-relay-service (CRS)

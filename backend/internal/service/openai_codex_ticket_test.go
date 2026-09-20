@@ -488,7 +488,7 @@ func TestOpenAICodexTicketProbeBackoffProgressionAndProxyReset(t *testing.T) {
 	key := openAICodexTicketKey(41, "gpt-6-astra")
 	now := time.Date(2026, time.September, 20, 0, 0, 0, 0, time.UTC)
 
-	for i, want := range []time.Duration{5 * time.Minute, 10 * time.Minute, 20 * time.Minute, 30 * time.Minute, 30 * time.Minute} {
+	for i, want := range []time.Duration{time.Minute, time.Minute, time.Minute, time.Minute, time.Minute, time.Minute, time.Minute, time.Minute, 30 * time.Minute} {
 		state := svc.recordOpenAICodexTicketProbeFailure(key, "http://proxy-a.example", now, time.Time{})
 		require.Equal(t, i+1, state.Failures)
 		require.Equal(t, want, state.RetryAt.Sub(now))
@@ -500,7 +500,7 @@ func TestOpenAICodexTicketProbeBackoffProgressionAndProxyReset(t *testing.T) {
 	require.False(t, svc.openAICodexTicketProbeBackedOff(key, "http://proxy-b.example", now))
 	state := svc.recordOpenAICodexTicketProbeFailure(key, "http://proxy-b.example", now, time.Time{})
 	require.Equal(t, 1, state.Failures)
-	require.Equal(t, 5*time.Minute, state.RetryAt.Sub(now))
+	require.Equal(t, time.Minute, state.RetryAt.Sub(now))
 }
 
 func TestOpenAICodexTicketProxySessionsAreIndependentAndRateLimited(t *testing.T) {
@@ -574,7 +574,8 @@ func TestOpenAICodexTicketProbeDoesNotRotateSessionOnHTTP400(t *testing.T) {
 	require.True(t, ok)
 	backoff := raw.(openAICodexTicketProbeBackoff)
 	require.Equal(t, 2, backoff.Failures)
-	require.Greater(t, time.Until(backoff.RetryAt), 9*time.Minute)
+	require.Greater(t, time.Until(backoff.RetryAt), 50*time.Second)
+	require.Less(t, time.Until(backoff.RetryAt), 70*time.Second)
 }
 
 func TestRefreshOpenAICodexTicketsRotatesFixedProxyOnceAfterConcurrentMisses(t *testing.T) {
@@ -648,7 +649,8 @@ func TestRefreshOpenAICodexTicketsDoesNotRotateFixedProxyOnHTTP400(t *testing.T)
 	require.Zero(t, upstream.rotateCalls)
 	raw, ok := svc.openaiCodexTicketProbeBackoffs.Load(openAICodexTicketKey(account.ID, "gpt-6-astra"))
 	require.True(t, ok)
-	require.Greater(t, time.Until(raw.(openAICodexTicketProbeBackoff).RetryAt), 4*time.Minute)
+	require.Greater(t, time.Until(raw.(openAICodexTicketProbeBackoff).RetryAt), 50*time.Second)
+	require.Less(t, time.Until(raw.(openAICodexTicketProbeBackoff).RetryAt), 70*time.Second)
 }
 
 func TestOpenAICodexTicketProbeBackoffPreservesFinalPreExpiryAttempt(t *testing.T) {
@@ -656,60 +658,58 @@ func TestOpenAICodexTicketProbeBackoffPreservesFinalPreExpiryAttempt(t *testing.
 	key := openAICodexTicketKey(41, "gpt-5.6-sol")
 	now := time.Date(2026, time.September, 20, 0, 0, 0, 0, time.UTC)
 	expiresAt := now.Add(10 * time.Minute)
+	settings := DefaultOpenAICodexTicketRuntimeSettings()
+	settings.RetryIntervalSeconds = 5 * 60
 
-	// The first failure keeps the normal five-minute delay. On the second
-	// failure, the ten-minute delay would cross ticket expiry, so it is pulled
-	// forward to the final safe attempt one minute before expiry.
-	first := svc.recordOpenAICodexTicketProbeFailure(key, "http://proxy.example", now, expiresAt)
+	first := svc.recordOpenAICodexTicketProbeFailureWithSettings(key, settings, now, expiresAt)
 	require.Equal(t, now.Add(5*time.Minute), first.RetryAt)
-	secondAt := now.Add(5 * time.Minute)
 	finalAttempt := now.Add(9 * time.Minute)
-	second := svc.recordOpenAICodexTicketProbeFailure(key, "http://proxy.example", secondAt, expiresAt)
+	second := svc.recordOpenAICodexTicketProbeFailureWithSettings(key, settings, first.RetryAt, expiresAt)
 	require.Equal(t, 2, second.Failures)
 	require.Equal(t, finalAttempt, second.RetryAt)
 
-	// The final minute remains in recovery mode instead of falling into the
-	// normal 20-minute backoff and leaving the account without a ticket.
-	third := svc.recordOpenAICodexTicketProbeFailure(key, "http://proxy.example", finalAttempt, expiresAt)
+	third := svc.recordOpenAICodexTicketProbeFailureWithSettings(key, settings, finalAttempt, expiresAt)
 	require.Equal(t, 3, third.Failures)
 	require.Equal(t, finalAttempt.Add(30*time.Second), third.RetryAt)
 }
 
-func TestOpenAICodexTicketSessionBackoffTriesFourExitsBeforeExpiry(t *testing.T) {
+func TestOpenAICodexTicketConfigurableBurstFallsBackToSteadyRetry(t *testing.T) {
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{}, nil)
 	key := openAICodexTicketKey(41, "gpt-5.6-sol")
-	template := "http://customer_90_" + openAICodexTicketProxySessionPlaceholder + ":secret@proxy.example:8080"
 	start := time.Date(2026, time.September, 20, 0, 0, 0, 0, time.UTC)
-	expiresAt := start.Add(10 * time.Minute)
-	finalAttempt := start.Add(9 * time.Minute)
+	settings := DefaultOpenAICodexTicketRuntimeSettings()
+	settings.RetryCount = 3
+	settings.RetryIntervalSeconds = 60
+	settings.SteadyRetryIntervalSeconds = 900
 
-	first := svc.recordOpenAICodexTicketProbeFailure(key, template, start, expiresAt)
-	require.Equal(t, start.Add(3*time.Minute), first.RetryAt)
-	second := svc.recordOpenAICodexTicketProbeFailure(key, template, first.RetryAt, expiresAt)
-	require.Equal(t, start.Add(7*time.Minute), second.RetryAt)
-	third := svc.recordOpenAICodexTicketProbeFailure(key, template, second.RetryAt, expiresAt)
-	require.Equal(t, finalAttempt, third.RetryAt)
-	fourth := svc.recordOpenAICodexTicketProbeFailure(key, template, finalAttempt, expiresAt)
-	require.Equal(t, finalAttempt.Add(30*time.Second), fourth.RetryAt)
+	first := svc.recordOpenAICodexTicketProbeFailureWithSettings(key, settings, start, time.Time{})
+	require.Equal(t, start.Add(time.Minute), first.RetryAt)
+	second := svc.recordOpenAICodexTicketProbeFailureWithSettings(key, settings, first.RetryAt, time.Time{})
+	require.Equal(t, first.RetryAt.Add(time.Minute), second.RetryAt)
+	third := svc.recordOpenAICodexTicketProbeFailureWithSettings(key, settings, second.RetryAt, time.Time{})
+	require.Equal(t, second.RetryAt.Add(time.Minute), third.RetryAt)
+	fourth := svc.recordOpenAICodexTicketProbeFailureWithSettings(key, settings, third.RetryAt, time.Time{})
+	require.Equal(t, third.RetryAt.Add(15*time.Minute), fourth.RetryAt)
 }
 
-func TestOpenAICodexTicketProbeBackoffRecoversAfterExpiryThenSettles(t *testing.T) {
+func TestOpenAICodexTicketProbeBackoffResetsBurstAfterExpiry(t *testing.T) {
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{}, nil)
 	key := openAICodexTicketKey(41, "gpt-5.6-sol")
-	proxyURL := "http://proxy.example"
 	expiresAt := time.Date(2026, time.September, 20, 0, 0, 0, 0, time.UTC)
+	settings := DefaultOpenAICodexTicketRuntimeSettings()
+	settings.RetryCount = 1
+	renewal := svc.recordOpenAICodexTicketProbeFailureWithSettings(key, settings, expiresAt.Add(-time.Minute), expiresAt)
+	require.Equal(t, 1, renewal.Failures)
 
 	justExpired := expiresAt.Add(time.Second)
-	first := svc.recordOpenAICodexTicketProbeFailure(key, proxyURL, justExpired, expiresAt)
-	require.Equal(t, justExpired.Add(3*time.Minute), first.RetryAt)
+	recovery := svc.recordOpenAICodexTicketProbeFailureWithSettings(key, settings, justExpired, expiresAt)
+	require.Equal(t, openAICodexTicketRetryPhaseExpiredRecovery, recovery.Phase)
+	require.Equal(t, 1, recovery.Failures)
+	require.Equal(t, justExpired.Add(time.Minute), recovery.RetryAt)
 
-	withinRecoveryWindow := expiresAt.Add(29 * time.Minute)
-	second := svc.recordOpenAICodexTicketProbeFailure(key, proxyURL, withinRecoveryWindow, expiresAt)
-	require.Equal(t, withinRecoveryWindow.Add(3*time.Minute), second.RetryAt)
-
-	afterRecoveryWindow := expiresAt.Add(30*time.Minute + time.Second)
-	third := svc.recordOpenAICodexTicketProbeFailure(key, proxyURL, afterRecoveryWindow, expiresAt)
-	require.Equal(t, afterRecoveryWindow.Add(30*time.Minute), third.RetryAt)
+	steady := svc.recordOpenAICodexTicketProbeFailureWithSettings(key, settings, recovery.RetryAt, expiresAt)
+	require.Equal(t, 2, steady.Failures)
+	require.Equal(t, recovery.RetryAt.Add(30*time.Minute), steady.RetryAt)
 }
 
 func TestOpenAICodexTicketProbeMissUsesRecentlyExpiredStoredTicket(t *testing.T) {
@@ -737,7 +737,7 @@ func TestOpenAICodexTicketProbeMissUsesRecentlyExpiredStoredTicket(t *testing.T)
 		292,
 		false,
 	)
-	require.WithinDuration(t, before.Add(3*time.Minute), state.RetryAt, time.Second)
+	require.WithinDuration(t, before.Add(time.Minute), state.RetryAt, time.Second)
 }
 
 func TestRefreshOpenAICodexTickets_BacksOffMissesUntilProxyChanges(t *testing.T) {
@@ -871,6 +871,81 @@ func TestOpenAICodexTicketStatuses_RespectRuntimeConfiguration(t *testing.T) {
 	cfg.FailClosed = true
 	require.True(t, OpenAICodexTicketStatuses(account, cfg, time.Now())[0].Blocked)
 }
+
+func TestRequestOpenAICodexTicketRetryIsScopedAndRateLimited(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	upstream := &codexTicketFuncUpstream{do: func(req *http.Request) (*http.Response, error) {
+		once.Do(func() { close(started) })
+		select {
+		case <-release:
+			h := http.Header{}
+			h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(312))
+			return &http.Response{StatusCode: http.StatusOK, Header: h, Body: io.NopCloser(strings.NewReader(""))}, nil
+		case <-req.Context().Done():
+			return nil, req.Context().Err()
+		}
+	}}
+	cfg := config.OpenAICodexTicketConfig{
+		Enabled:         true,
+		FailClosed:      true,
+		HarvestProxyURL: "http://proxy.example:8080",
+		Models:          []string{"gpt-6-astra", "gpt-5.6-sol"},
+	}
+	svc := ticketTestService(t, cfg, upstream)
+	account := ticketTestAccount(41)
+
+	retryAt, err := svc.RequestOpenAICodexTicketRetry(context.Background(), account, "gpt-6-astra")
+	require.NoError(t, err)
+	require.Greater(t, retryAt.Sub(time.Now()), 50*time.Second)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("manual probe did not start")
+	}
+	status := svc.OpenAICodexTicketStatuses(account, cfg, time.Now())
+	require.True(t, status[0].Probing)
+	require.False(t, status[0].ManualRetryAllowed)
+	_, err = svc.RequestOpenAICodexTicketRetry(context.Background(), account, "gpt-6-astra")
+	require.ErrorIs(t, err, ErrOpenAICodexTicketRetryInProgress)
+
+	close(release)
+	require.Eventually(t, func() bool {
+		status = svc.OpenAICodexTicketStatuses(account, cfg, time.Now())
+		return !status[0].Probing
+	}, time.Second, 10*time.Millisecond)
+	_, err = svc.RequestOpenAICodexTicketRetry(context.Background(), account, "gpt-6-astra")
+	require.ErrorIs(t, err, ErrOpenAICodexTicketRetryCooldown)
+	status = svc.OpenAICodexTicketStatuses(account, cfg, time.Now())
+	require.True(t, status[0].Blocked)
+	require.Greater(t, status[0].RetryInSeconds, int64(0))
+	require.Greater(t, status[0].ManualRetryInSeconds, int64(0))
+	require.False(t, status[0].ManualRetryAllowed)
+}
+
+func TestRequestOpenAICodexTicketRetryHarvestsTicket(t *testing.T) {
+	cfg := config.OpenAICodexTicketConfig{
+		Enabled:         true,
+		FailClosed:      true,
+		HarvestProxyURL: "http://proxy.example:8080",
+		Models:          []string{"gpt-6-astra"},
+	}
+	svc := ticketTestService(t, cfg, &codexTicketFuncUpstream{do: func(*http.Request) (*http.Response, error) {
+		return codexTicketResponse(), nil
+	}})
+	account := ticketTestAccount(41)
+
+	_, err := svc.RequestOpenAICodexTicketRetry(context.Background(), account, "gpt-6-astra")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		status := svc.OpenAICodexTicketStatuses(account, cfg, time.Now())
+		return len(status) == 1 && status[0].Ready && !status[0].Probing
+	}, time.Second, 10*time.Millisecond)
+	_, err = svc.RequestOpenAICodexTicketRetry(context.Background(), account, "gpt-6-astra")
+	require.ErrorIs(t, err, ErrOpenAICodexTicketRetryAlreadyReady)
+}
+
 func TestProbeOpenAICodexTicket_RejectsInvalidState(t *testing.T) {
 	for _, state := range []string{fakeCodexTicketState(312), strings.Repeat("X", 292), ""} {
 		h := http.Header{}

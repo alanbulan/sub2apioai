@@ -490,6 +490,44 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		return nil, infraerrors.BadRequest("INVALID_CODEX_HARVEST_PROXY", err.Error())
 	}
 	updates[SettingKeyOpenAICodexTicketHarvestProxyURL] = strings.TrimSpace(settings.OpenAICodexTicketHarvestProxyURL)
+	proxyPoolJSON, err := MarshalOpenAICodexTicketProxyPool(settings.OpenAICodexTicketProxyPool)
+	if err != nil {
+		return nil, infraerrors.BadRequest("INVALID_CODEX_HARVEST_PROXY_POOL", err.Error())
+	}
+	updates[SettingKeyOpenAICodexTicketProxyPool] = proxyPoolJSON
+	ticketRuntime := OpenAICodexTicketRuntimeSettings{
+		RetryCount:                 settings.OpenAICodexTicketRetryCount,
+		RetryIntervalSeconds:       settings.OpenAICodexTicketRetryIntervalSeconds,
+		SteadyRetryIntervalSeconds: settings.OpenAICodexTicketSteadyRetryIntervalSeconds,
+		ManualRetryCooldownSeconds: settings.OpenAICodexTicketManualRetryCooldownSeconds,
+	}
+	// Preserve compatibility for internal full-document callers compiled before
+	// these fields existed. HTTP requests are merged and validated by the handler,
+	// so an explicitly submitted zero is still rejected there.
+	defaults := DefaultOpenAICodexTicketRuntimeSettings()
+	if ticketRuntime.RetryCount == 0 {
+		ticketRuntime.RetryCount = defaults.RetryCount
+		settings.OpenAICodexTicketRetryCount = defaults.RetryCount
+	}
+	if ticketRuntime.RetryIntervalSeconds == 0 {
+		ticketRuntime.RetryIntervalSeconds = defaults.RetryIntervalSeconds
+		settings.OpenAICodexTicketRetryIntervalSeconds = defaults.RetryIntervalSeconds
+	}
+	if ticketRuntime.SteadyRetryIntervalSeconds == 0 {
+		ticketRuntime.SteadyRetryIntervalSeconds = defaults.SteadyRetryIntervalSeconds
+		settings.OpenAICodexTicketSteadyRetryIntervalSeconds = defaults.SteadyRetryIntervalSeconds
+	}
+	if ticketRuntime.ManualRetryCooldownSeconds == 0 {
+		ticketRuntime.ManualRetryCooldownSeconds = defaults.ManualRetryCooldownSeconds
+		settings.OpenAICodexTicketManualRetryCooldownSeconds = defaults.ManualRetryCooldownSeconds
+	}
+	if err := validateOpenAICodexTicketRuntimePolicy(ticketRuntime); err != nil {
+		return nil, infraerrors.BadRequest("INVALID_CODEX_TICKET_RETRY_POLICY", err.Error())
+	}
+	updates[SettingKeyOpenAICodexTicketRetryCount] = strconv.Itoa(ticketRuntime.RetryCount)
+	updates[SettingKeyOpenAICodexTicketRetryIntervalSeconds] = strconv.Itoa(ticketRuntime.RetryIntervalSeconds)
+	updates[SettingKeyOpenAICodexTicketSteadyRetryIntervalSeconds] = strconv.Itoa(ticketRuntime.SteadyRetryIntervalSeconds)
+	updates[SettingKeyOpenAICodexTicketManualRetryCooldownSeconds] = strconv.Itoa(ticketRuntime.ManualRetryCooldownSeconds)
 	// SettingKeyOpenAICodexClientVersionSynced 由自动同步任务独占写入，此处不得覆盖，
 	// 否则面板保存会把同步结果清空。
 	// codex_cli_only 加固
@@ -746,6 +784,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	s.InvalidateOpenAICodexClientVersionCache()
 	s.InvalidateOpenAICodexTicketEnabledCache()
 	s.InvalidateOpenAICodexTicketHarvestProxyCache()
+	s.InvalidateOpenAICodexTicketRuntimeSettingsCache()
 	openAIAdvancedSchedulerSettingSF.Forget(openAIAdvancedSchedulerSettingKey)
 	openAIAdvancedSchedulerSettingCache.Store(&cachedOpenAIAdvancedSchedulerSetting{
 		lowUpstreamRatePriorityEnabled: settings.OpenAILowUpstreamRatePriorityEnabled,

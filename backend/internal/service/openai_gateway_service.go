@@ -512,6 +512,10 @@ type OpenAIGatewayService struct {
 	openaiCodexTickets             sync.Map
 	openaiCodexTicketProbeBackoffs sync.Map
 	openaiCodexTicketProxySessions sync.Map
+	openaiCodexTicketProbing       sync.Map
+	openaiCodexTicketManualRetries sync.Map
+	openaiCodexTicketManualRetryMu sync.Mutex
+	openaiCodexTicketProxyPool     openAICodexTicketProxyPoolRuntime
 	openaiCodexTicketFlight        singleflight.Group
 	openaiCodexTicketLifecycleMu   sync.Mutex
 	openaiCodexTicketCancel        context.CancelFunc

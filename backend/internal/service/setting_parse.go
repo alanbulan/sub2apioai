@@ -247,6 +247,11 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAICodexClientVersionSynced:                     "",
 		SettingKeyOpenAICodexVersionAutoSyncEnabled:                  "true",
 		SettingKeyOpenAICodexTicketHarvestProxyURL:                   "",
+		SettingKeyOpenAICodexTicketProxyPool:                         "",
+		SettingKeyOpenAICodexTicketRetryCount:                        strconv.Itoa(OpenAICodexTicketRetryCountDefault),
+		SettingKeyOpenAICodexTicketRetryIntervalSeconds:              strconv.Itoa(OpenAICodexTicketRetryIntervalSecondsDefault),
+		SettingKeyOpenAICodexTicketSteadyRetryIntervalSeconds:        strconv.Itoa(OpenAICodexTicketSteadyRetryIntervalSecondsDefault),
+		SettingKeyOpenAICodexTicketManualRetryCooldownSeconds:        strconv.Itoa(OpenAICodexTicketManualRetryCooldownSecondsDefault),
 		SettingPaymentVisibleMethodAlipaySource:                      "",
 		SettingPaymentVisibleMethodWxpaySource:                       "",
 		SettingPaymentVisibleMethodAlipayEnabled:                     "false",
@@ -898,6 +903,13 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.OpenAICodexTicketEnabled = s.cfg.Gateway.OpenAICodexTicket.Enabled
 	}
 	result.OpenAICodexTicketHarvestProxyURL = strings.TrimSpace(settings[SettingKeyOpenAICodexTicketHarvestProxyURL])
+	ticketRuntime := parseOpenAICodexTicketRuntimePolicy(settings)
+	ticketRuntime.ProxyPool = resolveOpenAICodexTicketProxyPool(settings, "")
+	result.OpenAICodexTicketProxyPool = ticketRuntime.ProxyPool
+	result.OpenAICodexTicketRetryCount = ticketRuntime.RetryCount
+	result.OpenAICodexTicketRetryIntervalSeconds = ticketRuntime.RetryIntervalSeconds
+	result.OpenAICodexTicketSteadyRetryIntervalSeconds = ticketRuntime.SteadyRetryIntervalSeconds
+	result.OpenAICodexTicketManualRetryCooldownSeconds = ticketRuntime.ManualRetryCooldownSeconds
 	// codex_cli_only 加固
 	result.MinCodexVersion = settings[SettingKeyMinCodexVersion]
 	result.MaxCodexVersion = settings[SettingKeyMaxCodexVersion]

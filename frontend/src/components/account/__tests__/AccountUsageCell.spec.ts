@@ -3,16 +3,27 @@ import { flushPromises, mount } from '@vue/test-utils'
 import AccountUsageCell from '../AccountUsageCell.vue'
 import type { Account } from '@/types'
 
-const { getUsage } = vi.hoisted(() => ({
-  getUsage: vi.fn()
+const { getUsage, getById, retryCodexTurnTicket } = vi.hoisted(() => ({
+  getUsage: vi.fn(),
+  getById: vi.fn(),
+  retryCodexTurnTicket: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
-      getUsage
+      getUsage,
+      getById,
+      retryCodexTurnTicket
     }
   }
+}))
+
+vi.mock('@/stores/app', () => ({
+  useAppStore: () => ({
+    showSuccess: vi.fn(),
+    showError: vi.fn()
+  })
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -91,6 +102,8 @@ const cnUsageCellStubs = {
 describe('AccountUsageCell', () => {
   beforeEach(() => {
     getUsage.mockReset()
+    getById.mockReset()
+    retryCodexTurnTicket.mockReset()
     Object.defineProperty(window, 'matchMedia', {
       writable: true,
       value: vi.fn().mockImplementation(() => ({

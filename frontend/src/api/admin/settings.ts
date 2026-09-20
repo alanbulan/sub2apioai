@@ -397,6 +397,15 @@ export function deriveWeChatConnectStoredMode(
 /**
  * System settings interface
  */
+export interface OpenAICodexTicketProxy {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  priority: number;
+  weight: number;
+}
+
 export interface SystemSettings {
   // Registration settings
   registration_enabled: boolean;
@@ -642,6 +651,11 @@ export interface SystemSettings {
   openai_codex_ticket_enabled: boolean;
   openai_codex_ticket_harvest_proxy_url: string;
   openai_codex_ticket_harvest_proxy_configured: boolean;
+  openai_codex_ticket_proxy_pool: OpenAICodexTicketProxy[];
+  openai_codex_ticket_retry_count: number;
+  openai_codex_ticket_retry_interval_seconds: number;
+  openai_codex_ticket_steady_retry_interval_seconds: number;
+  openai_codex_ticket_manual_retry_cooldown_seconds: number;
   // codex_cli_only 加固
   min_codex_version: string;
   max_codex_version: string;
@@ -963,6 +977,11 @@ export interface UpdateSettingsRequest {
   openai_codex_version_auto_sync_enabled?: boolean;
   openai_codex_ticket_enabled?: boolean;
   openai_codex_ticket_harvest_proxy_url?: string;
+  openai_codex_ticket_proxy_pool?: OpenAICodexTicketProxy[];
+  openai_codex_ticket_retry_count?: number;
+  openai_codex_ticket_retry_interval_seconds?: number;
+  openai_codex_ticket_steady_retry_interval_seconds?: number;
+  openai_codex_ticket_manual_retry_cooldown_seconds?: number;
   // codex_cli_only 加固
   min_codex_version?: string;
   max_codex_version?: string;

@@ -243,22 +243,27 @@ type UpdateSettingsRequest struct {
 	BackendModeEnabled bool `json:"backend_mode_enabled"`
 
 	// Gateway forwarding behavior
-	OpenAITTFTMode                         *string `json:"openai_ttft_mode"`
-	EnableFingerprintUnification           *bool   `json:"enable_fingerprint_unification"`
-	EnableMetadataPassthrough              *bool   `json:"enable_metadata_passthrough"`
-	EnableCCHSigning                       *bool   `json:"enable_cch_signing"`
-	EnableClaudeOAuthSystemPromptInjection *bool   `json:"enable_claude_oauth_system_prompt_injection"`
-	ClaudeOAuthSystemPrompt                *string `json:"claude_oauth_system_prompt"`
-	ClaudeOAuthSystemPromptBlocks          *string `json:"claude_oauth_system_prompt_blocks"`
-	EnableAnthropicCacheTTL1hInjection     *bool   `json:"enable_anthropic_cache_ttl_1h_injection"`
-	RewriteMessageCacheControl             *bool   `json:"rewrite_message_cache_control"`
-	EnableClientDatelineNormalization      *bool   `json:"enable_client_dateline_normalization"`
-	AntigravityUserAgentVersion            *string `json:"antigravity_user_agent_version"`
-	OpenAICodexUserAgent                   *string `json:"openai_codex_user_agent"`
-	OpenAICodexClientVersion               *string `json:"openai_codex_client_version"`
-	OpenAICodexVersionAutoSyncEnabled      *bool   `json:"openai_codex_version_auto_sync_enabled"`
-	OpenAICodexTicketEnabled               *bool   `json:"openai_codex_ticket_enabled"`
-	OpenAICodexTicketHarvestProxyURL       string  `json:"openai_codex_ticket_harvest_proxy_url"`
+	OpenAITTFTMode                              *string                           `json:"openai_ttft_mode"`
+	EnableFingerprintUnification                *bool                             `json:"enable_fingerprint_unification"`
+	EnableMetadataPassthrough                   *bool                             `json:"enable_metadata_passthrough"`
+	EnableCCHSigning                            *bool                             `json:"enable_cch_signing"`
+	EnableClaudeOAuthSystemPromptInjection      *bool                             `json:"enable_claude_oauth_system_prompt_injection"`
+	ClaudeOAuthSystemPrompt                     *string                           `json:"claude_oauth_system_prompt"`
+	ClaudeOAuthSystemPromptBlocks               *string                           `json:"claude_oauth_system_prompt_blocks"`
+	EnableAnthropicCacheTTL1hInjection          *bool                             `json:"enable_anthropic_cache_ttl_1h_injection"`
+	RewriteMessageCacheControl                  *bool                             `json:"rewrite_message_cache_control"`
+	EnableClientDatelineNormalization           *bool                             `json:"enable_client_dateline_normalization"`
+	AntigravityUserAgentVersion                 *string                           `json:"antigravity_user_agent_version"`
+	OpenAICodexUserAgent                        *string                           `json:"openai_codex_user_agent"`
+	OpenAICodexClientVersion                    *string                           `json:"openai_codex_client_version"`
+	OpenAICodexVersionAutoSyncEnabled           *bool                             `json:"openai_codex_version_auto_sync_enabled"`
+	OpenAICodexTicketEnabled                    *bool                             `json:"openai_codex_ticket_enabled"`
+	OpenAICodexTicketHarvestProxyURL            string                            `json:"openai_codex_ticket_harvest_proxy_url"`
+	OpenAICodexTicketProxyPool                  *[]service.OpenAICodexTicketProxy `json:"openai_codex_ticket_proxy_pool"`
+	OpenAICodexTicketRetryCount                 *int                              `json:"openai_codex_ticket_retry_count"`
+	OpenAICodexTicketRetryIntervalSeconds       *int                              `json:"openai_codex_ticket_retry_interval_seconds"`
+	OpenAICodexTicketSteadyRetryIntervalSeconds *int                              `json:"openai_codex_ticket_steady_retry_interval_seconds"`
+	OpenAICodexTicketManualRetryCooldownSeconds *int                              `json:"openai_codex_ticket_manual_retry_cooldown_seconds"`
 
 	// codex_cli_only 加固（global-only）
 	MinCodexVersion                      string `json:"min_codex_version"`
@@ -482,6 +487,11 @@ func settingsAuditRequest(req UpdateSettingsRequest) UpdateSettingsRequest {
 	req.TencentCaptchaCloudSecretID = strings.TrimSpace(req.TencentCaptchaCloudSecretID)
 	req.TencentCaptchaCloudSecretKey = strings.TrimSpace(req.TencentCaptchaCloudSecretKey)
 	req.AliyunCaptchaAccessKeySecret = strings.TrimSpace(req.AliyunCaptchaAccessKeySecret)
+	req.OpenAICodexTicketHarvestProxyURL = service.MaskProxyURL(req.OpenAICodexTicketHarvestProxyURL)
+	if req.OpenAICodexTicketProxyPool != nil {
+		masked := service.MaskOpenAICodexTicketProxyPool(*req.OpenAICodexTicketProxyPool)
+		req.OpenAICodexTicketProxyPool = &masked
+	}
 	return req
 }
 
@@ -498,6 +508,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 	auditReq := settingsAuditRequest(req)
 	omitted := omittedSettingKeys(sentFields)
+	if req.OpenAICodexTicketProxyPool != nil {
+		delete(omitted, service.SettingKeyOpenAICodexTicketHarvestProxyURL)
+	}
 
 	previousSettings, err := h.settingService.GetAllSettings(c.Request.Context())
 	if err != nil {
@@ -1500,6 +1513,49 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 
+	legacyCodexProxyURL := previousSettings.OpenAICodexTicketHarvestProxyURL
+	codexProxyPool := append([]service.OpenAICodexTicketProxy(nil), previousSettings.OpenAICodexTicketProxyPool...)
+	if req.OpenAICodexTicketProxyPool != nil {
+		resolved, err := service.ReconcileOpenAICodexTicketProxyPool(*req.OpenAICodexTicketProxyPool, previousSettings.OpenAICodexTicketProxyPool)
+		if err != nil {
+			response.Error(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		codexProxyPool = resolved
+		// Once the pool is explicitly saved it is authoritative. Clearing the old
+		// value prevents a removed pool from silently reviving the legacy proxy.
+		legacyCodexProxyURL = ""
+	} else if _, sent := sentFields[service.SettingKeyOpenAICodexTicketHarvestProxyURL]; sent {
+		next := strings.TrimSpace(req.OpenAICodexTicketHarvestProxyURL)
+		if !service.IsMaskedProxyURL(next) {
+			legacyCodexProxyURL = next
+			codexProxyPool = service.OpenAICodexTicketLegacyProxyPool(next)
+		}
+	}
+
+	codexRetryPolicy := service.OpenAICodexTicketRuntimeSettings{
+		RetryCount:                 previousSettings.OpenAICodexTicketRetryCount,
+		RetryIntervalSeconds:       previousSettings.OpenAICodexTicketRetryIntervalSeconds,
+		SteadyRetryIntervalSeconds: previousSettings.OpenAICodexTicketSteadyRetryIntervalSeconds,
+		ManualRetryCooldownSeconds: previousSettings.OpenAICodexTicketManualRetryCooldownSeconds,
+	}
+	if req.OpenAICodexTicketRetryCount != nil {
+		codexRetryPolicy.RetryCount = *req.OpenAICodexTicketRetryCount
+	}
+	if req.OpenAICodexTicketRetryIntervalSeconds != nil {
+		codexRetryPolicy.RetryIntervalSeconds = *req.OpenAICodexTicketRetryIntervalSeconds
+	}
+	if req.OpenAICodexTicketSteadyRetryIntervalSeconds != nil {
+		codexRetryPolicy.SteadyRetryIntervalSeconds = *req.OpenAICodexTicketSteadyRetryIntervalSeconds
+	}
+	if req.OpenAICodexTicketManualRetryCooldownSeconds != nil {
+		codexRetryPolicy.ManualRetryCooldownSeconds = *req.OpenAICodexTicketManualRetryCooldownSeconds
+	}
+	if err := service.ValidateOpenAICodexTicketRuntimePolicy(codexRetryPolicy); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	settings := &service.SystemSettings{
 		// 系统全局 platform quota 默认值（整体替换语义）
 		DefaultPlatformQuotas:       req.DefaultPlatformQuotas,
@@ -1776,17 +1832,16 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpenAICodexTicketEnabled
 		}(),
-		OpenAICodexTicketHarvestProxyURL: func() string {
-			next := strings.TrimSpace(req.OpenAICodexTicketHarvestProxyURL)
-			if service.IsMaskedProxyURL(next) {
-				return previousSettings.OpenAICodexTicketHarvestProxyURL
-			}
-			return next
-		}(),
-		MinCodexVersion:       strings.TrimSpace(req.MinCodexVersion),
-		MaxCodexVersion:       strings.TrimSpace(req.MaxCodexVersion),
-		CodexCLIOnlyBlacklist: strings.TrimSpace(req.CodexCLIOnlyBlacklist),
-		CodexCLIOnlyWhitelist: strings.TrimSpace(req.CodexCLIOnlyWhitelist),
+		OpenAICodexTicketHarvestProxyURL:            legacyCodexProxyURL,
+		OpenAICodexTicketProxyPool:                  codexProxyPool,
+		OpenAICodexTicketRetryCount:                 codexRetryPolicy.RetryCount,
+		OpenAICodexTicketRetryIntervalSeconds:       codexRetryPolicy.RetryIntervalSeconds,
+		OpenAICodexTicketSteadyRetryIntervalSeconds: codexRetryPolicy.SteadyRetryIntervalSeconds,
+		OpenAICodexTicketManualRetryCooldownSeconds: codexRetryPolicy.ManualRetryCooldownSeconds,
+		MinCodexVersion:                             strings.TrimSpace(req.MinCodexVersion),
+		MaxCodexVersion:                             strings.TrimSpace(req.MaxCodexVersion),
+		CodexCLIOnlyBlacklist:                       strings.TrimSpace(req.CodexCLIOnlyBlacklist),
+		CodexCLIOnlyWhitelist:                       strings.TrimSpace(req.CodexCLIOnlyWhitelist),
 		CodexCLIOnlyAllowAppServerClients: func() bool {
 			if req.CodexCLIOnlyAllowAppServerClients != nil {
 				return *req.CodexCLIOnlyAllowAppServerClients
@@ -2327,7 +2382,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAICodexVersionAutoSyncEnabled:                      updatedSettings.OpenAICodexVersionAutoSyncEnabled,
 		OpenAICodexTicketEnabled:                               updatedSettings.OpenAICodexTicketEnabled,
 		OpenAICodexTicketHarvestProxyURL:                       service.MaskProxyURL(updatedSettings.OpenAICodexTicketHarvestProxyURL),
-		OpenAICodexTicketHarvestProxyConfigured:                strings.TrimSpace(updatedSettings.OpenAICodexTicketHarvestProxyURL) != "",
+		OpenAICodexTicketHarvestProxyConfigured:                strings.TrimSpace(updatedSettings.OpenAICodexTicketHarvestProxyURL) != "" || len(updatedSettings.OpenAICodexTicketProxyPool) > 0,
+		OpenAICodexTicketProxyPool:                             service.MaskOpenAICodexTicketProxyPool(updatedSettings.OpenAICodexTicketProxyPool),
+		OpenAICodexTicketRetryCount:                            updatedSettings.OpenAICodexTicketRetryCount,
+		OpenAICodexTicketRetryIntervalSeconds:                  updatedSettings.OpenAICodexTicketRetryIntervalSeconds,
+		OpenAICodexTicketSteadyRetryIntervalSeconds:            updatedSettings.OpenAICodexTicketSteadyRetryIntervalSeconds,
+		OpenAICodexTicketManualRetryCooldownSeconds:            updatedSettings.OpenAICodexTicketManualRetryCooldownSeconds,
 		MinCodexVersion:                                        updatedSettings.MinCodexVersion,
 		MaxCodexVersion:                                        updatedSettings.MaxCodexVersion,
 		CodexCLIOnlyBlacklist:                                  updatedSettings.CodexCLIOnlyBlacklist,

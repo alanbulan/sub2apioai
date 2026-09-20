@@ -4516,27 +4516,137 @@
                     v-model="form.openai_codex_ticket_enabled"
                   />
                 </div>
-                <div>
-                  <h3 class="text-base font-semibold text-gray-900 dark:text-white">
-                    {{ t("admin.settings.gatewayForwarding.codexTicketHarvestProxy") }}
-                  </h3>
-                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.gatewayForwarding.codexTicketHarvestProxyDesc") }}
-                  </p>
-                  <input
-                    id="codex-ticket-harvest-proxy"
-                    v-model="form.openai_codex_ticket_harvest_proxy_url"
-                    type="text"
-                    class="input mt-3 w-full font-mono text-sm"
-                    :placeholder="t('admin.settings.gatewayForwarding.codexTicketHarvestProxyPlaceholder')"
-                    autocomplete="off"
-                  />
-                  <p
-                    v-if="form.openai_codex_ticket_harvest_proxy_configured"
-                    class="mt-1.5 text-xs text-gray-500 dark:text-gray-400"
+                <div class="space-y-3 border-t border-gray-100 pt-4 dark:border-dark-700">
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <h3 class="text-base font-semibold text-gray-900 dark:text-white">
+                        {{ t("admin.settings.gatewayForwarding.codexTicketProxyPool") }}
+                      </h3>
+                      <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.gatewayForwarding.codexTicketProxyPoolDesc") }}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      class="btn btn-secondary btn-sm inline-flex items-center gap-1.5"
+                      @click="addCodexTicketProxy"
+                    >
+                      <Icon name="plus" size="xs" />
+                      {{ t("admin.settings.gatewayForwarding.codexTicketProxyAdd") }}
+                    </button>
+                  </div>
+
+                  <div
+                    v-if="form.openai_codex_ticket_proxy_pool.length === 0"
+                    class="border-y border-dashed border-gray-200 py-6 text-center text-sm text-gray-500 dark:border-dark-600 dark:text-gray-400"
                   >
-                    {{ t("admin.settings.gatewayForwarding.codexTicketHarvestProxyConfigured") }}
-                  </p>
+                    {{ t("admin.settings.gatewayForwarding.codexTicketProxyEmpty") }}
+                  </div>
+                  <div
+                    v-else
+                    class="divide-y divide-gray-100 border-y border-gray-200 dark:divide-dark-700 dark:border-dark-600"
+                  >
+                    <div
+                      v-for="(proxy, index) in form.openai_codex_ticket_proxy_pool"
+                      :key="proxy.id"
+                      class="space-y-3 py-4"
+                    >
+                      <div class="flex min-w-0 items-center gap-3">
+                        <Toggle
+                          v-model="proxy.enabled"
+                          :aria-label="t('admin.settings.gatewayForwarding.codexTicketProxyEnabled')"
+                        />
+                        <input
+                          v-model="proxy.name"
+                          type="text"
+                          class="input min-w-0 flex-1 text-sm"
+                          :aria-label="t('admin.settings.gatewayForwarding.codexTicketProxyName')"
+                          :placeholder="t('admin.settings.gatewayForwarding.codexTicketProxyName')"
+                          maxlength="100"
+                        />
+                        <div class="flex h-8 flex-none items-center gap-1">
+                          <button
+                            type="button"
+                            class="inline-flex h-8 w-8 items-center justify-center text-gray-500 transition-colors hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-30 dark:text-gray-400 dark:hover:text-white"
+                            :disabled="index === 0"
+                            :title="t('admin.settings.gatewayForwarding.codexTicketProxyMoveUp')"
+                            :aria-label="t('admin.settings.gatewayForwarding.codexTicketProxyMoveUp')"
+                            @click="moveCodexTicketProxy(index, -1)"
+                          >
+                            <Icon name="arrowUp" size="xs" />
+                          </button>
+                          <button
+                            type="button"
+                            class="inline-flex h-8 w-8 items-center justify-center text-gray-500 transition-colors hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-30 dark:text-gray-400 dark:hover:text-white"
+                            :disabled="index === form.openai_codex_ticket_proxy_pool.length - 1"
+                            :title="t('admin.settings.gatewayForwarding.codexTicketProxyMoveDown')"
+                            :aria-label="t('admin.settings.gatewayForwarding.codexTicketProxyMoveDown')"
+                            @click="moveCodexTicketProxy(index, 1)"
+                          >
+                            <Icon name="arrowDown" size="xs" />
+                          </button>
+                          <button
+                            type="button"
+                            class="inline-flex h-8 w-8 items-center justify-center text-red-500 transition-colors hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+                            :title="t('admin.settings.gatewayForwarding.codexTicketProxyRemove')"
+                            :aria-label="t('admin.settings.gatewayForwarding.codexTicketProxyRemove')"
+                            @click="removeCodexTicketProxy(index)"
+                          >
+                            <Icon name="trash" size="xs" />
+                          </button>
+                        </div>
+                      </div>
+                      <input
+                        v-model="proxy.url"
+                        type="text"
+                        class="input w-full font-mono text-sm"
+                        :aria-label="t('admin.settings.gatewayForwarding.codexTicketProxyURL')"
+                        :placeholder="t('admin.settings.gatewayForwarding.codexTicketHarvestProxyPlaceholder')"
+                        autocomplete="off"
+                      />
+                      <div class="grid gap-3 sm:grid-cols-2">
+                        <label class="text-xs font-medium text-gray-600 dark:text-gray-300">
+                          {{ t("admin.settings.gatewayForwarding.codexTicketProxyPriority") }}
+                          <input
+                            v-model.number="proxy.priority"
+                            type="number"
+                            min="0"
+                            max="100"
+                            class="input mt-1 w-full text-sm"
+                          />
+                        </label>
+                        <label class="text-xs font-medium text-gray-600 dark:text-gray-300">
+                          {{ t("admin.settings.gatewayForwarding.codexTicketProxyWeight") }}
+                          <input
+                            v-model.number="proxy.weight"
+                            type="number"
+                            min="1"
+                            max="100"
+                            class="input mt-1 w-full text-sm"
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="grid gap-4 border-t border-gray-100 pt-4 sm:grid-cols-2 dark:border-dark-700">
+                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.gatewayForwarding.codexTicketRetryCount") }}
+                    <input v-model.number="form.openai_codex_ticket_retry_count" type="number" min="1" max="100" class="input mt-2 w-full" />
+                  </label>
+                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.gatewayForwarding.codexTicketRetryInterval") }}
+                    <input v-model.number="form.openai_codex_ticket_retry_interval_seconds" type="number" min="5" max="86400" class="input mt-2 w-full" />
+                  </label>
+                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.gatewayForwarding.codexTicketSteadyRetryInterval") }}
+                    <input v-model.number="form.openai_codex_ticket_steady_retry_interval_seconds" type="number" min="30" max="86400" class="input mt-2 w-full" />
+                  </label>
+                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.gatewayForwarding.codexTicketManualCooldown") }}
+                    <input v-model.number="form.openai_codex_ticket_manual_retry_cooldown_seconds" type="number" min="5" max="86400" class="input mt-2 w-full" />
+                  </label>
                 </div>
                 <div>
                   <h3 class="text-base font-semibold text-gray-900 dark:text-white">
@@ -8877,6 +8987,7 @@ import type {
   UpdateSettingsRequest,
   DefaultSubscriptionSetting,
   DefaultPlatformQuotasMap,
+  OpenAICodexTicketProxy,
   OpenAIFastPolicyRule,
   WeChatConnectMode,
   WebSearchEmulationConfig,
@@ -9880,6 +9991,11 @@ const form = reactive<SettingsForm>({
   openai_codex_ticket_enabled: false,
   openai_codex_ticket_harvest_proxy_url: "",
   openai_codex_ticket_harvest_proxy_configured: false,
+  openai_codex_ticket_proxy_pool: [] as OpenAICodexTicketProxy[],
+  openai_codex_ticket_retry_count: 8,
+  openai_codex_ticket_retry_interval_seconds: 60,
+  openai_codex_ticket_steady_retry_interval_seconds: 1800,
+  openai_codex_ticket_manual_retry_cooldown_seconds: 60,
   // codex_cli_only 加固
   min_codex_version: "",
   max_codex_version: "",
@@ -10867,6 +10983,37 @@ const codexSyncedVersionLabel = computed(() => {
   });
 });
 
+let codexTicketProxySequence = 0;
+
+function nextCodexTicketProxyID(): string {
+  codexTicketProxySequence += 1;
+  return `proxy-${Date.now().toString(36)}-${codexTicketProxySequence.toString(36)}`;
+}
+
+function addCodexTicketProxy(): void {
+  if (form.openai_codex_ticket_proxy_pool.length >= 32) return;
+  form.openai_codex_ticket_proxy_pool.push({
+    id: nextCodexTicketProxyID(),
+    name: "",
+    url: "",
+    enabled: true,
+    priority: 0,
+    weight: 100,
+  });
+}
+
+function removeCodexTicketProxy(index: number): void {
+  form.openai_codex_ticket_proxy_pool.splice(index, 1);
+}
+
+function moveCodexTicketProxy(index: number, direction: -1 | 1): void {
+  const target = index + direction;
+  if (target < 0 || target >= form.openai_codex_ticket_proxy_pool.length) return;
+  const current = form.openai_codex_ticket_proxy_pool[index];
+  form.openai_codex_ticket_proxy_pool[index] = form.openai_codex_ticket_proxy_pool[target];
+  form.openai_codex_ticket_proxy_pool[target] = current;
+}
+
 async function loadSettings() {
   loading.value = true;
   loadFailed.value = false;
@@ -10880,6 +11027,11 @@ async function loadSettings() {
         (form as Record<string, unknown>)[key] = value;
       }
     }
+    form.openai_codex_ticket_proxy_pool = Array.isArray(
+      settings.openai_codex_ticket_proxy_pool,
+    )
+      ? settings.openai_codex_ticket_proxy_pool.map((proxy) => ({ ...proxy }))
+      : [];
     syncCaptchaProviderSelection();
     if (!form.claude_oauth_system_prompt_blocks?.trim()) {
       form.claude_oauth_system_prompt_blocks =
@@ -11487,8 +11639,27 @@ async function saveSettings() {
       openai_codex_version_auto_sync_enabled:
         form.openai_codex_version_auto_sync_enabled,
       openai_codex_ticket_enabled: form.openai_codex_ticket_enabled,
-      openai_codex_ticket_harvest_proxy_url:
-        form.openai_codex_ticket_harvest_proxy_url?.trim() || "",
+      openai_codex_ticket_proxy_pool: form.openai_codex_ticket_proxy_pool.map(
+        (proxy) => ({
+          ...proxy,
+          name: proxy.name.trim(),
+          url: proxy.url.trim(),
+          priority: Number(proxy.priority),
+          weight: Number(proxy.weight),
+        }),
+      ),
+      openai_codex_ticket_retry_count: Number(
+        form.openai_codex_ticket_retry_count,
+      ),
+      openai_codex_ticket_retry_interval_seconds: Number(
+        form.openai_codex_ticket_retry_interval_seconds,
+      ),
+      openai_codex_ticket_steady_retry_interval_seconds: Number(
+        form.openai_codex_ticket_steady_retry_interval_seconds,
+      ),
+      openai_codex_ticket_manual_retry_cooldown_seconds: Number(
+        form.openai_codex_ticket_manual_retry_cooldown_seconds,
+      ),
       min_codex_version: form.min_codex_version?.trim() || "",
       max_codex_version: form.max_codex_version?.trim() || "",
       codex_cli_only_allow_app_server_clients:

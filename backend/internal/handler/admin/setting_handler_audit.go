@@ -2,6 +2,7 @@ package admin
 
 import (
 	"log/slog"
+	"reflect"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -487,6 +488,21 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.OpenAICodexTicketHarvestProxyURL != after.OpenAICodexTicketHarvestProxyURL {
 		changed = append(changed, "openai_codex_ticket_harvest_proxy_url")
+	}
+	if !reflect.DeepEqual(before.OpenAICodexTicketProxyPool, after.OpenAICodexTicketProxyPool) {
+		changed = append(changed, "openai_codex_ticket_proxy_pool")
+	}
+	if before.OpenAICodexTicketRetryCount != after.OpenAICodexTicketRetryCount {
+		changed = append(changed, "openai_codex_ticket_retry_count")
+	}
+	if before.OpenAICodexTicketRetryIntervalSeconds != after.OpenAICodexTicketRetryIntervalSeconds {
+		changed = append(changed, "openai_codex_ticket_retry_interval_seconds")
+	}
+	if before.OpenAICodexTicketSteadyRetryIntervalSeconds != after.OpenAICodexTicketSteadyRetryIntervalSeconds {
+		changed = append(changed, "openai_codex_ticket_steady_retry_interval_seconds")
+	}
+	if before.OpenAICodexTicketManualRetryCooldownSeconds != after.OpenAICodexTicketManualRetryCooldownSeconds {
+		changed = append(changed, "openai_codex_ticket_manual_retry_cooldown_seconds")
 	}
 	if before.OpenAICodexUserAgent != after.OpenAICodexUserAgent {
 		changed = append(changed, "openai_codex_user_agent")

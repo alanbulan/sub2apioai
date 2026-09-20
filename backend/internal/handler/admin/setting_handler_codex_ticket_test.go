@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -36,6 +37,62 @@ func TestSettingsCodexTicketProxyWriteReadAndHotReload(t *testing.T) {
 	require.Equal(t, http.StatusOK, get.Code)
 	require.NotContains(t, get.Body.String(), "new-secret")
 	require.Contains(t, get.Body.String(), "new.example.com")
+}
+
+func TestSettingsCodexTicketProxyPoolPreservesMaskedSecrets(t *testing.T) {
+	storedPool := []service.OpenAICodexTicketProxy{{
+		ID:       "primary",
+		Name:     "old name",
+		URL:      "http://user:pool-secret@pool.example.com:8080",
+		Enabled:  true,
+		Priority: 0,
+		Weight:   10,
+	}}
+	rawPool, err := service.MarshalOpenAICodexTicketProxyPool(storedPool)
+	require.NoError(t, err)
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{
+		service.SettingKeyOpenAICodexTicketProxyPool: rawPool,
+	})
+	masked := service.MaskOpenAICodexTicketProxyPool(storedPool)
+	masked[0].Name = "new name"
+	masked[0].Weight = 25
+	rec := doUpdateSettings(t, h, map[string]any{
+		service.SettingKeyOpenAICodexTicketProxyPool: masked,
+	}, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NotContains(t, rec.Body.String(), "pool-secret")
+
+	var persisted []service.OpenAICodexTicketProxy
+	require.NoError(t, json.Unmarshal([]byte(repo.values[service.SettingKeyOpenAICodexTicketProxyPool]), &persisted))
+	require.Len(t, persisted, 1)
+	require.Equal(t, storedPool[0].URL, persisted[0].URL)
+	require.Equal(t, "new name", persisted[0].Name)
+	require.Equal(t, 25, persisted[0].Weight)
+}
+
+func TestSettingsCodexTicketExplicitEmptyPoolClearsLegacyProxy(t *testing.T) {
+	legacyURL := "http://user:legacy-secret@legacy.example.com:8080"
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{
+		service.SettingKeyOpenAICodexTicketHarvestProxyURL: legacyURL,
+	})
+	rec := doUpdateSettings(t, h, map[string]any{
+		service.SettingKeyOpenAICodexTicketProxyPool: []any{},
+	}, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, "[]", repo.values[service.SettingKeyOpenAICodexTicketProxyPool])
+	require.Empty(t, repo.values[service.SettingKeyOpenAICodexTicketHarvestProxyURL])
+	require.NotContains(t, rec.Body.String(), "legacy-secret")
+}
+
+func TestSettingsCodexTicketRejectsInvalidRetryPolicy(t *testing.T) {
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{
+		service.SettingKeyOpenAICodexTicketRetryCount: "8",
+	})
+	rec := doUpdateSettings(t, h, map[string]any{
+		service.SettingKeyOpenAICodexTicketRetryCount: 0,
+	}, nil)
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Equal(t, "8", repo.values[service.SettingKeyOpenAICodexTicketRetryCount])
 }
 
 func TestSettingsCodexTicketRejectInvalidProxyWithoutLeakingPassword(t *testing.T) {

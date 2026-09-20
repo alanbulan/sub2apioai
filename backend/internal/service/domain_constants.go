@@ -713,6 +713,12 @@ const (
 	SettingKeyOpenAICodexTicketEnabled = "openai_codex_ticket_enabled"
 	// SettingKeyOpenAICodexTicketHarvestProxyURL Codex 292 打票出口（socks5h/http），后台可改、热更新。
 	SettingKeyOpenAICodexTicketHarvestProxyURL = "openai_codex_ticket_harvest_proxy_url"
+	// SettingKeyOpenAICodexTicketProxyPool stores the ordered, weighted harvest proxy list as JSON.
+	SettingKeyOpenAICodexTicketProxyPool                  = "openai_codex_ticket_proxy_pool"
+	SettingKeyOpenAICodexTicketRetryCount                 = "openai_codex_ticket_retry_count"
+	SettingKeyOpenAICodexTicketRetryIntervalSeconds       = "openai_codex_ticket_retry_interval_seconds"
+	SettingKeyOpenAICodexTicketSteadyRetryIntervalSeconds = "openai_codex_ticket_steady_retry_interval_seconds"
+	SettingKeyOpenAICodexTicketManualRetryCooldownSeconds = "openai_codex_ticket_manual_retry_cooldown_seconds"
 	// SettingKeyOpenAIAllowClaudeCodeCodexPlugin 已废弃：历史全局开关只作为升级迁移输入读取。
 	// 迁移后等价规则写入 SettingKeyCodexCLIOnlyWhitelist，不再参与运行时判定。
 	SettingKeyOpenAIAllowClaudeCodeCodexPlugin = "openai_allow_claude_code_codex_plugin"

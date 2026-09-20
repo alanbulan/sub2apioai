@@ -417,6 +417,14 @@ export async function recoverState(id: number): Promise<Account> {
   return data
 }
 
+/** Start one controlled Codex 292 ticket probe for an account/model pair. */
+export async function retryCodexTurnTicket(id: number, model: string): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/codex-turn-ticket/retry`, {
+    model
+  })
+  return data
+}
+
 /**
  * Reset account quota usage
  * @param id - Account ID
@@ -1095,6 +1103,7 @@ export const accountsAPI = {
   getBatchTodayStats,
   clearRateLimit,
   recoverState,
+  retryCodexTurnTicket,
   resetAccountQuota,
   getTempUnschedulableStatus,
   resetTempUnschedulable,

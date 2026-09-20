@@ -2261,15 +2261,28 @@
           {{ t('admin.accounts.openai.codexTurnTicketDesc') }}
         </p>
         <div class="mt-3 space-y-1.5">
-          <div v-for="ticket in codexTurnTickets" :key="ticket.model" class="flex items-center justify-between text-sm">
+          <div v-for="ticket in codexTurnTickets" :key="ticket.model" class="flex items-center justify-between gap-3 text-sm">
             <span class="font-medium">{{ ticket.model }}</span>
-            <span v-if="ticket.ready" class="text-emerald-600 dark:text-emerald-400">
-              {{ t('admin.accounts.openai.codexTurnTicketReady', { time: formatCodexTicketRemaining(ticket.remaining_seconds) }) }}
-            </span>
-            <span v-else-if="ticket.blocked" class="text-amber-600 dark:text-amber-400">
-              {{ t('admin.accounts.openai.codexTurnTicketPaused') }}
-            </span>
-            <span v-else class="text-gray-500">{{ t('admin.accounts.openai.codexTurnTicketMissing') }}</span>
+            <div class="flex min-w-0 flex-wrap items-center justify-end gap-2">
+              <span v-if="ticket.ready" class="text-emerald-600 dark:text-emerald-400">
+                {{ t('admin.accounts.openai.codexTurnTicketReady', { time: formatCodexTicketRemaining(ticket.remaining_seconds) }) }}
+              </span>
+              <template v-else-if="ticket.blocked">
+                <span class="text-amber-600 dark:text-amber-400">
+                  {{ t('admin.accounts.openai.codexTurnTicketPaused') }}
+                </span>
+                <span v-if="ticket.retry_in_seconds" class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.accounts.openai.codexTurnTicketAutoRetryIn', { time: formatCodexTicketRetryDelay(ticket.retry_in_seconds) }) }}
+                </span>
+                <CodexTicketRetryButton
+                  v-if="account"
+                  :account="account"
+                  :ticket="ticket"
+                  @account-updated="handleCodexTicketAccountUpdated"
+                />
+              </template>
+              <span v-else class="text-gray-500">{{ t('admin.accounts.openai.codexTurnTicketMissing') }}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -3078,6 +3091,7 @@ import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtocolRulesEditor.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
+import CodexTicketRetryButton from '@/components/account/CodexTicketRetryButton.vue'
 import {
   applyAntigravityProjectID,
   applyHeaderOverride,
@@ -3175,6 +3189,16 @@ function formatCodexTicketRemaining(seconds: number) {
   const m = Math.floor(total / 60)
   const s = total % 60
   return `${m}m${String(s).padStart(2, '0')}s`
+}
+
+function formatCodexTicketRetryDelay(seconds: number) {
+  const total = Math.max(0, Math.ceil(seconds || 0))
+  if (total < 60) return `${total}s`
+  return `${Math.ceil(total / 60)}m`
+}
+
+function handleCodexTicketAccountUpdated(updatedAccount: Account) {
+  emit('updated', updatedAccount)
 }
 
 const hideAccountLongContextBilling = computed(() => {
