@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +31,13 @@ const (
 	openAICodexTicketDefaultSolModel = "gpt-5.6-sol"
 )
 
+var openAICodexTicketProbeBackoffSteps = [...]time.Duration{
+	5 * time.Minute,
+	10 * time.Minute,
+	20 * time.Minute,
+	30 * time.Minute,
+}
+
 // ErrOpenAICodexTicketUnavailable 表示该号该模型没有可用的 292 门票，
 // 且 fail_closed 禁止裸打业务请求。
 var ErrOpenAICodexTicketUnavailable = errors.New("codex turn-state ticket unavailable")
@@ -44,6 +52,12 @@ type openAICodexTicket struct {
 	Attempts   int       `json:"attempts"`
 }
 
+type openAICodexTicketProbeBackoff struct {
+	Failures         int
+	RetryAt          time.Time
+	ProxyFingerprint [sha256.Size]byte
+}
+
 func openAICodexTicketKey(accountID int64, model string) string {
 	return fmt.Sprintf("%d\x00%s", accountID, strings.TrimSpace(model))
 }
@@ -54,6 +68,47 @@ func openAICodexTicketExtraKey(model string) string {
 
 func normalizeOpenAICodexTicketModel(model string) string {
 	return strings.TrimSpace(model)
+}
+
+func openAICodexTicketProxyFingerprint(proxyURL string) [sha256.Size]byte {
+	return sha256.Sum256([]byte(strings.TrimSpace(proxyURL)))
+}
+
+func (s *OpenAIGatewayService) openAICodexTicketProbeBackedOff(key, proxyURL string, now time.Time) bool {
+	if s == nil {
+		return false
+	}
+	raw, ok := s.openaiCodexTicketProbeBackoffs.Load(key)
+	if !ok {
+		return false
+	}
+	state, ok := raw.(openAICodexTicketProbeBackoff)
+	if !ok || state.ProxyFingerprint != openAICodexTicketProxyFingerprint(proxyURL) {
+		s.openaiCodexTicketProbeBackoffs.Delete(key)
+		return false
+	}
+	return now.Before(state.RetryAt)
+}
+
+func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailure(key, proxyURL string, now time.Time) openAICodexTicketProbeBackoff {
+	fingerprint := openAICodexTicketProxyFingerprint(proxyURL)
+	failures := 1
+	if raw, ok := s.openaiCodexTicketProbeBackoffs.Load(key); ok {
+		if previous, valid := raw.(openAICodexTicketProbeBackoff); valid && previous.ProxyFingerprint == fingerprint {
+			failures = previous.Failures + 1
+		}
+	}
+	step := failures - 1
+	if step >= len(openAICodexTicketProbeBackoffSteps) {
+		step = len(openAICodexTicketProbeBackoffSteps) - 1
+	}
+	state := openAICodexTicketProbeBackoff{
+		Failures:         failures,
+		RetryAt:          now.Add(openAICodexTicketProbeBackoffSteps[step]),
+		ProxyFingerprint: fingerprint,
+	}
+	s.openaiCodexTicketProbeBackoffs.Store(key, state)
+	return state
 }
 
 func extractOpenAICodexTicketModel(body []byte) string {
@@ -480,7 +535,16 @@ func (s *OpenAIGatewayService) openAICodexTicketHarvestLoop(ctx context.Context)
 // ticket once. The loop waits for all probes, then waits the configured interval
 // before starting the next cycle.
 func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
-	if s == nil || s.accountRepo == nil || ctx.Err() != nil || !s.openAICodexTicketEnabledContext(ctx) {
+	if s == nil || s.accountRepo == nil || ctx.Err() != nil {
+		return
+	}
+	if !s.openAICodexTicketEnabledContext(ctx) {
+		s.openaiCodexTicketProbeBackoffs.Clear()
+		return
+	}
+	proxyURL := s.openAICodexTicketHarvestProxyURLContext(ctx)
+	if proxyURL == "" {
+		s.openaiCodexTicketProbeBackoffs.Clear()
 		return
 	}
 	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
@@ -496,6 +560,9 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 	for i := range accounts {
 		account := accounts[i]
 		if !openAICodexTicketProbeEligible(&account, now) {
+			for _, model := range cfg.Models {
+				s.openaiCodexTicketProbeBackoffs.Delete(openAICodexTicketKey(account.ID, normalizeOpenAICodexTicketModel(model)))
+			}
 			continue
 		}
 		for _, model := range cfg.Models {
@@ -505,6 +572,10 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 			}
 			// 已有一张有效且未临近过期的票 → 本周期不打，省得白刷。
 			if t := s.lookupOpenAICodexTicket(&account, model); t.valid(now, cfg.TargetLength) && !t.needsRefresh(now, refreshBefore) {
+				continue
+			}
+			key := openAICodexTicketKey(account.ID, model)
+			if s.openAICodexTicketProbeBackedOff(key, proxyURL, now) {
 				continue
 			}
 			acc := account
@@ -541,24 +612,31 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 	_, _, _ = s.openaiCodexTicketFlight.Do(key, func() (any, error) {
 		token, _, err := s.GetAccessToken(ctx, account)
 		if err != nil || strings.TrimSpace(token) == "" {
+			backoff := s.recordOpenAICodexTicketProbeFailure(key, proxyURL, time.Now())
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
-				zap.String("reason", "token"), zap.Error(err))
+				zap.String("reason", "token"), zap.Error(err),
+				zap.Int("failures", backoff.Failures), zap.Int64("retry_in_seconds", int64(time.Until(backoff.RetryAt)/time.Second)))
 			return nil, nil
 		}
 		state, status, perr := s.fireOpenAICodexTicketProbe(ctx, account, token, model, proxyURL, time.Duration(cfg.HarvestAttemptTimeoutSeconds)*time.Second)
 		if perr != nil {
+			backoff := s.recordOpenAICodexTicketProbeFailure(key, proxyURL, time.Now())
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
-				zap.String("reason", "error"), zap.Error(perr))
+				zap.String("reason", "error"), zap.Error(perr),
+				zap.Int("failures", backoff.Failures), zap.Int64("retry_in_seconds", int64(time.Until(backoff.RetryAt)/time.Second)))
 			return nil, nil
 		}
 		if status != http.StatusOK || state == "" || len(state) != cfg.TargetLength || !strings.HasPrefix(state, openAICodexTicketStatePrefix) {
+			backoff := s.recordOpenAICodexTicketProbeFailure(key, proxyURL, time.Now())
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
-				zap.Int("http", status), zap.Int("len", len(state)))
+				zap.Int("http", status), zap.Int("len", len(state)),
+				zap.Int("failures", backoff.Failures), zap.Int64("retry_in_seconds", int64(time.Until(backoff.RetryAt)/time.Second)))
 			return nil, nil
 		}
+		s.openaiCodexTicketProbeBackoffs.Delete(key)
 		now := time.Now()
 		ticket := &openAICodexTicket{
 			AccountID:  account.ID,
