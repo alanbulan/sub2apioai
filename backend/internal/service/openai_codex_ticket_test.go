@@ -42,6 +42,20 @@ func ticketTestService(t *testing.T, cfg config.OpenAICodexTicketConfig, upstrea
 	}
 }
 
+type codexTicketProxySequenceUpstream struct {
+	HTTPUpstream
+	proxies []string
+	lengths []int
+}
+
+func (u *codexTicketProxySequenceUpstream) Do(_ *http.Request, proxyURL string, _ int64, _ int) (*http.Response, error) {
+	u.proxies = append(u.proxies, proxyURL)
+	length := u.lengths[len(u.proxies)-1]
+	h := http.Header{}
+	h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(length))
+	return &http.Response{StatusCode: http.StatusOK, Header: h, Body: io.NopCloser(strings.NewReader(""))}, nil
+}
+
 func TestApplyOpenAICodexTicket_ReplacesHeader(t *testing.T) {
 	state := fakeCodexTicketState(292)
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
@@ -450,6 +464,54 @@ func TestOpenAICodexTicketProbeBackoffProgressionAndProxyReset(t *testing.T) {
 	require.Equal(t, 5*time.Minute, state.RetryAt.Sub(now))
 }
 
+func TestOpenAICodexTicketProxySessionsAreIndependentAndRateLimited(t *testing.T) {
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{}, nil)
+	template := "http://customer_90_" + openAICodexTicketProxySessionPlaceholder + ":secret@proxy.example:8080"
+	astraKey := openAICodexTicketKey(41, "gpt-6-astra")
+	solKey := openAICodexTicketKey(41, "gpt-5.6-sol")
+
+	astraFirst := svc.openAICodexTicketProbeProxyURL(astraKey, template)
+	require.NotContains(t, astraFirst, openAICodexTicketProxySessionPlaceholder)
+	require.Equal(t, astraFirst, svc.openAICodexTicketProbeProxyURL(astraKey, template))
+	require.NotEqual(t, astraFirst, svc.openAICodexTicketProbeProxyURL(solKey, template))
+
+	now := time.Date(2026, time.September, 20, 0, 0, 0, 0, time.UTC)
+	svc.recordOpenAICodexTicketProbeFailure(astraKey, template, now, time.Time{})
+	require.Equal(t, 1, svc.rotateOpenAICodexTicketProxySession(astraKey, template))
+	astraSecond := svc.openAICodexTicketProbeProxyURL(astraKey, template)
+	require.NotEqual(t, astraFirst, astraSecond)
+	// Session rotation changes the effective proxy URL, but the unchanged
+	// template keeps the account/model inside its existing cooldown.
+	require.True(t, svc.openAICodexTicketProbeBackedOff(astraKey, template, now))
+
+	svc.markOpenAICodexTicketProxySessionSuccessful(astraKey, template)
+	require.Equal(t, 1, svc.rotateOpenAICodexTicketProxySession(astraKey, template))
+	require.Equal(t, "http://fixed.example:8080", svc.openAICodexTicketProbeProxyURL(astraKey, "http://fixed.example:8080"))
+	require.Zero(t, svc.rotateOpenAICodexTicketProxySession(astraKey, "http://fixed.example:8080"))
+}
+
+func TestOpenAICodexTicketProbeRotatesTemplatedProxyAndRetainsSuccess(t *testing.T) {
+	template := "http://customer_90_" + openAICodexTicketProxySessionPlaceholder + ":secret@proxy.example:8080"
+	upstream := &codexTicketProxySequenceUpstream{lengths: []int{312, 292, 292}}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled:         true,
+		HarvestProxyURL: template,
+		Models:          []string{"gpt-6-astra"},
+	}, upstream)
+	account := ticketTestAccount(41)
+
+	svc.probeOnceOpenAICodexTicket(context.Background(), account, "gpt-6-astra")
+	svc.probeOnceOpenAICodexTicket(context.Background(), account, "gpt-6-astra")
+	svc.probeOnceOpenAICodexTicket(context.Background(), account, "gpt-6-astra")
+
+	require.Len(t, upstream.proxies, 3)
+	for _, proxyURL := range upstream.proxies {
+		require.NotContains(t, proxyURL, openAICodexTicketProxySessionPlaceholder)
+	}
+	require.NotEqual(t, upstream.proxies[0], upstream.proxies[1])
+	require.Equal(t, upstream.proxies[1], upstream.proxies[2])
+}
+
 func TestOpenAICodexTicketProbeBackoffPreservesFinalPreExpiryAttempt(t *testing.T) {
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{}, nil)
 	key := openAICodexTicketKey(41, "gpt-5.6-sol")
@@ -471,6 +533,23 @@ func TestOpenAICodexTicketProbeBackoffPreservesFinalPreExpiryAttempt(t *testing.
 	third := svc.recordOpenAICodexTicketProbeFailure(key, "http://proxy.example", finalAttempt, finalAttempt)
 	require.Equal(t, 3, third.Failures)
 	require.Equal(t, finalAttempt.Add(20*time.Minute), third.RetryAt)
+}
+
+func TestOpenAICodexTicketSessionBackoffTriesFourExitsBeforeExpiry(t *testing.T) {
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{}, nil)
+	key := openAICodexTicketKey(41, "gpt-5.6-sol")
+	template := "http://customer_90_" + openAICodexTicketProxySessionPlaceholder + ":secret@proxy.example:8080"
+	start := time.Date(2026, time.September, 20, 0, 0, 0, 0, time.UTC)
+	finalAttempt := start.Add(9 * time.Minute)
+
+	first := svc.recordOpenAICodexTicketProbeFailure(key, template, start, finalAttempt)
+	require.Equal(t, start.Add(3*time.Minute), first.RetryAt)
+	second := svc.recordOpenAICodexTicketProbeFailure(key, template, first.RetryAt, finalAttempt)
+	require.Equal(t, start.Add(7*time.Minute), second.RetryAt)
+	third := svc.recordOpenAICodexTicketProbeFailure(key, template, second.RetryAt, finalAttempt)
+	require.Equal(t, finalAttempt, third.RetryAt)
+	fourth := svc.recordOpenAICodexTicketProbeFailure(key, template, finalAttempt, finalAttempt)
+	require.Equal(t, finalAttempt.Add(30*time.Minute), fourth.RetryAt)
 }
 
 func TestRefreshOpenAICodexTickets_BacksOffMissesUntilProxyChanges(t *testing.T) {

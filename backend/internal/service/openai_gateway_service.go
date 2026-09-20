@@ -511,6 +511,7 @@ type OpenAIGatewayService struct {
 	// openaiCodexTickets: accountID\x00model → *openAICodexTicket，292 长度门票。
 	openaiCodexTickets             sync.Map
 	openaiCodexTicketProbeBackoffs sync.Map
+	openaiCodexTicketProxySessions sync.Map
 	openaiCodexTicketFlight        singleflight.Group
 	openaiCodexTicketLifecycleMu   sync.Mutex
 	openaiCodexTicketCancel        context.CancelFunc

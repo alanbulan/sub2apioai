@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,11 +95,19 @@ func TestCodexTicketProxyRuntimeSettingAndFallback(t *testing.T) {
 }
 
 func TestCodexTicketProxyMaskAndValidation(t *testing.T) {
-	for _, raw := range []string{"http://user:secret@proxy.example.com:8080", "socks5h://user:secret@proxy.example.com:1080", "https://user:secret@[::1]:443"} {
+	for _, raw := range []string{
+		"http://user:secret@proxy.example.com:8080",
+		"socks5h://user:secret@proxy.example.com:1080",
+		"https://user:secret@[::1]:443",
+		"http://customer_90___SESSION__:secret@proxy.example.com:8080",
+	} {
 		require.NoError(t, ValidateOpenAICodexTicketHarvestProxyURL(raw))
 		masked := MaskProxyURL(raw)
 		require.NotContains(t, masked, "secret")
 		require.True(t, IsMaskedProxyURL(masked))
+		if strings.Contains(raw, openAICodexTicketProxySessionPlaceholder) {
+			require.Contains(t, masked, openAICodexTicketProxySessionPlaceholder)
+		}
 	}
 	require.True(t, IsMaskedProxyURL(""))
 	require.False(t, IsMaskedProxyURL("http://user:secret***suffix@proxy.example.com:8080"))
@@ -108,6 +117,7 @@ func TestCodexTicketProxyMaskAndValidation(t *testing.T) {
 		require.NotContains(t, err.Error(), "secret")
 		require.Empty(t, MaskProxyURL(raw))
 	}
+	require.Error(t, ValidateOpenAICodexTicketHarvestProxyURL("http://first___SESSION___second___SESSION__:secret@proxy.example.com:8080"))
 }
 
 func TestCodexTicketSettingsRefreshDoesNotMutateSharedConfig(t *testing.T) {

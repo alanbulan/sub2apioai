@@ -548,8 +548,8 @@ export default {
           "When off, the gateway neither harvests nor injects x-codex-turn-state and forwards traffic as usual. When on, it harvests tickets in the background and overwrites that header on production requests.",
         codexTicketHarvestProxy: "292 harvest proxy",
         codexTicketHarvestProxyDesc:
-          "Used only for minting 292 tickets when the ticket feature is enabled. Changes apply to subsequent probes without a restart. Production traffic still uses each account's residential proxy. Paste a full HTTP or SOCKS5h proxy URL including username and password. The proxy provider must handle IP rotation. Leave blank when saving to keep the stored value.",
-        codexTicketHarvestProxyPlaceholder: "http://user:pass{'@'}proxy.example.com:1080",
+          "Used only for minting 292 tickets; production traffic still uses each account's residential proxy. Put __SESSION__ in the proxy URL's session position to give every account/model an independent 12-character sticky session. Failed probes rotate that session within the existing backoff limits. URLs without the placeholder remain fixed. Changes apply without a restart; leave blank to keep the stored value.",
+        codexTicketHarvestProxyPlaceholder: "http://user___SESSION__:pass{'@'}proxy.example.com:8080",
         codexTicketHarvestProxyConfigured: "Configured (password hidden). Paste a full new proxy URL to replace it.",
         codexClientRestrictionTitle: "Codex client restriction",
         codexHardeningDesc:
