@@ -200,7 +200,9 @@ download_feature_patch() {
     local output="$2"
     local patch_url
 
-    patch_url="https://github.com/${UPSTREAM_REPO}/compare/${UPSTREAM_REF}...${patch_head}.diff"
+    # Qualify the commit with the fork owner so newly pushed commits resolve
+    # before GitHub's cross-repository SHA index catches up.
+    patch_url="https://github.com/${UPSTREAM_REPO}/compare/${UPSTREAM_REF}...${FEATURE_REPO%%/*}:${patch_head}.diff"
     log "download: feature patch ${FEATURE_REPO}@${patch_head}"
     download_with_retries "$patch_url" "$output" 2>&1 | tee -a "$LOG_FILE"
 
