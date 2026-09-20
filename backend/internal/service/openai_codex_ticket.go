@@ -29,6 +29,7 @@ const (
 	openAICodexTicketStatePrefix     = "gAAAAA"
 	openAICodexTicketDefaultModel    = "gpt-6-astra"
 	openAICodexTicketDefaultSolModel = "gpt-5.6-sol"
+	openAICodexTicketFinalRetryLead  = time.Minute
 )
 
 var openAICodexTicketProbeBackoffSteps = [...]time.Duration{
@@ -90,7 +91,7 @@ func (s *OpenAIGatewayService) openAICodexTicketProbeBackedOff(key, proxyURL str
 	return now.Before(state.RetryAt)
 }
 
-func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailure(key, proxyURL string, now time.Time) openAICodexTicketProbeBackoff {
+func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailure(key, proxyURL string, now, retryDeadline time.Time) openAICodexTicketProbeBackoff {
 	fingerprint := openAICodexTicketProxyFingerprint(proxyURL)
 	failures := 1
 	if raw, ok := s.openaiCodexTicketProbeBackoffs.Load(key); ok {
@@ -102,13 +103,29 @@ func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailure(key, proxyURL
 	if step >= len(openAICodexTicketProbeBackoffSteps) {
 		step = len(openAICodexTicketProbeBackoffSteps) - 1
 	}
+	retryAt := now.Add(openAICodexTicketProbeBackoffSteps[step])
+	if retryDeadline.After(now) && retryAt.After(retryDeadline) {
+		retryAt = retryDeadline
+	}
 	state := openAICodexTicketProbeBackoff{
 		Failures:         failures,
-		RetryAt:          now.Add(openAICodexTicketProbeBackoffSteps[step]),
+		RetryAt:          retryAt,
 		ProxyFingerprint: fingerprint,
 	}
 	s.openaiCodexTicketProbeBackoffs.Store(key, state)
 	return state
+}
+
+func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeMiss(account *Account, model, key, proxyURL string, targetLen int) openAICodexTicketProbeBackoff {
+	now := time.Now()
+	retryDeadline := time.Time{}
+	if ticket := s.lookupOpenAICodexTicket(account, model); ticket.valid(now, targetLen) {
+		candidate := ticket.ExpiresAt.Add(-openAICodexTicketFinalRetryLead)
+		if candidate.After(now) {
+			retryDeadline = candidate
+		}
+	}
+	return s.recordOpenAICodexTicketProbeFailure(key, proxyURL, now, retryDeadline)
 }
 
 func extractOpenAICodexTicketModel(body []byte) string {
@@ -612,7 +629,7 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 	_, _, _ = s.openaiCodexTicketFlight.Do(key, func() (any, error) {
 		token, _, err := s.GetAccessToken(ctx, account)
 		if err != nil || strings.TrimSpace(token) == "" {
-			backoff := s.recordOpenAICodexTicketProbeFailure(key, proxyURL, time.Now())
+			backoff := s.recordOpenAICodexTicketProbeMiss(account, model, key, proxyURL, cfg.TargetLength)
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.String("reason", "token"), zap.Error(err),
@@ -621,7 +638,7 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 		}
 		state, status, perr := s.fireOpenAICodexTicketProbe(ctx, account, token, model, proxyURL, time.Duration(cfg.HarvestAttemptTimeoutSeconds)*time.Second)
 		if perr != nil {
-			backoff := s.recordOpenAICodexTicketProbeFailure(key, proxyURL, time.Now())
+			backoff := s.recordOpenAICodexTicketProbeMiss(account, model, key, proxyURL, cfg.TargetLength)
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.String("reason", "error"), zap.Error(perr),
@@ -629,7 +646,7 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 			return nil, nil
 		}
 		if status != http.StatusOK || state == "" || len(state) != cfg.TargetLength || !strings.HasPrefix(state, openAICodexTicketStatePrefix) {
-			backoff := s.recordOpenAICodexTicketProbeFailure(key, proxyURL, time.Now())
+			backoff := s.recordOpenAICodexTicketProbeMiss(account, model, key, proxyURL, cfg.TargetLength)
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.Int("http", status), zap.Int("len", len(state)),

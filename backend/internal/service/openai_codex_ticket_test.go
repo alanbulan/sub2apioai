@@ -436,7 +436,7 @@ func TestOpenAICodexTicketProbeBackoffProgressionAndProxyReset(t *testing.T) {
 	now := time.Date(2026, time.September, 20, 0, 0, 0, 0, time.UTC)
 
 	for i, want := range []time.Duration{5 * time.Minute, 10 * time.Minute, 20 * time.Minute, 30 * time.Minute, 30 * time.Minute} {
-		state := svc.recordOpenAICodexTicketProbeFailure(key, "http://proxy-a.example", now)
+		state := svc.recordOpenAICodexTicketProbeFailure(key, "http://proxy-a.example", now, time.Time{})
 		require.Equal(t, i+1, state.Failures)
 		require.Equal(t, want, state.RetryAt.Sub(now))
 		require.True(t, svc.openAICodexTicketProbeBackedOff(key, "http://proxy-a.example", now))
@@ -445,9 +445,32 @@ func TestOpenAICodexTicketProbeBackoffProgressionAndProxyReset(t *testing.T) {
 	// A newly configured proxy must be tried immediately instead of inheriting
 	// the old endpoint's cooldown.
 	require.False(t, svc.openAICodexTicketProbeBackedOff(key, "http://proxy-b.example", now))
-	state := svc.recordOpenAICodexTicketProbeFailure(key, "http://proxy-b.example", now)
+	state := svc.recordOpenAICodexTicketProbeFailure(key, "http://proxy-b.example", now, time.Time{})
 	require.Equal(t, 1, state.Failures)
 	require.Equal(t, 5*time.Minute, state.RetryAt.Sub(now))
+}
+
+func TestOpenAICodexTicketProbeBackoffPreservesFinalPreExpiryAttempt(t *testing.T) {
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{}, nil)
+	key := openAICodexTicketKey(41, "gpt-5.6-sol")
+	now := time.Date(2026, time.September, 20, 0, 0, 0, 0, time.UTC)
+
+	// The first failure keeps the normal five-minute delay. On the second
+	// failure, the ten-minute delay would cross ticket expiry, so it is pulled
+	// forward to the final safe attempt one minute before expiry.
+	first := svc.recordOpenAICodexTicketProbeFailure(key, "http://proxy.example", now, time.Time{})
+	require.Equal(t, now.Add(5*time.Minute), first.RetryAt)
+	secondAt := now.Add(5 * time.Minute)
+	finalAttempt := now.Add(9 * time.Minute)
+	second := svc.recordOpenAICodexTicketProbeFailure(key, "http://proxy.example", secondAt, finalAttempt)
+	require.Equal(t, 2, second.Failures)
+	require.Equal(t, finalAttempt, second.RetryAt)
+
+	// Once that deadline is reached, failures return to the normal long
+	// backoff instead of spinning at the expiry boundary.
+	third := svc.recordOpenAICodexTicketProbeFailure(key, "http://proxy.example", finalAttempt, finalAttempt)
+	require.Equal(t, 3, third.Failures)
+	require.Equal(t, finalAttempt.Add(20*time.Minute), third.RetryAt)
 }
 
 func TestRefreshOpenAICodexTickets_BacksOffMissesUntilProxyChanges(t *testing.T) {
