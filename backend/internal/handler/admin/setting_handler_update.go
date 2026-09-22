@@ -260,9 +260,7 @@ type UpdateSettingsRequest struct {
 	OpenAICodexTicketEnabled                    *bool                             `json:"openai_codex_ticket_enabled"`
 	OpenAICodexTicketHarvestProxyURL            string                            `json:"openai_codex_ticket_harvest_proxy_url"`
 	OpenAICodexTicketProxyPool                  *[]service.OpenAICodexTicketProxy `json:"openai_codex_ticket_proxy_pool"`
-	OpenAICodexTicketRetryCount                 *int                              `json:"openai_codex_ticket_retry_count"`
 	OpenAICodexTicketRetryIntervalSeconds       *int                              `json:"openai_codex_ticket_retry_interval_seconds"`
-	OpenAICodexTicketSteadyRetryIntervalSeconds *int                              `json:"openai_codex_ticket_steady_retry_interval_seconds"`
 	OpenAICodexTicketManualRetryCooldownSeconds *int                              `json:"openai_codex_ticket_manual_retry_cooldown_seconds"`
 	OpenAICodexTicketTTLSeconds                 *int                              `json:"openai_codex_ticket_ttl_seconds"`
 	OpenAICodexTicketRefreshBeforeSeconds       *int                              `json:"openai_codex_ticket_refresh_before_seconds"`
@@ -1536,21 +1534,13 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 
 	codexRetryPolicy := service.OpenAICodexTicketRuntimeSettings{
-		RetryCount:                 previousSettings.OpenAICodexTicketRetryCount,
 		RetryIntervalSeconds:       previousSettings.OpenAICodexTicketRetryIntervalSeconds,
-		SteadyRetryIntervalSeconds: previousSettings.OpenAICodexTicketSteadyRetryIntervalSeconds,
 		ManualRetryCooldownSeconds: previousSettings.OpenAICodexTicketManualRetryCooldownSeconds,
 		TTLSeconds:                 previousSettings.OpenAICodexTicketTTLSeconds,
 		RefreshBeforeSeconds:       previousSettings.OpenAICodexTicketRefreshBeforeSeconds,
 	}
-	if req.OpenAICodexTicketRetryCount != nil {
-		codexRetryPolicy.RetryCount = *req.OpenAICodexTicketRetryCount
-	}
 	if req.OpenAICodexTicketRetryIntervalSeconds != nil {
 		codexRetryPolicy.RetryIntervalSeconds = *req.OpenAICodexTicketRetryIntervalSeconds
-	}
-	if req.OpenAICodexTicketSteadyRetryIntervalSeconds != nil {
-		codexRetryPolicy.SteadyRetryIntervalSeconds = *req.OpenAICodexTicketSteadyRetryIntervalSeconds
 	}
 	if req.OpenAICodexTicketManualRetryCooldownSeconds != nil {
 		codexRetryPolicy.ManualRetryCooldownSeconds = *req.OpenAICodexTicketManualRetryCooldownSeconds
@@ -1844,9 +1834,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		}(),
 		OpenAICodexTicketHarvestProxyURL:            legacyCodexProxyURL,
 		OpenAICodexTicketProxyPool:                  codexProxyPool,
-		OpenAICodexTicketRetryCount:                 codexRetryPolicy.RetryCount,
 		OpenAICodexTicketRetryIntervalSeconds:       codexRetryPolicy.RetryIntervalSeconds,
-		OpenAICodexTicketSteadyRetryIntervalSeconds: codexRetryPolicy.SteadyRetryIntervalSeconds,
 		OpenAICodexTicketManualRetryCooldownSeconds: codexRetryPolicy.ManualRetryCooldownSeconds,
 		OpenAICodexTicketTTLSeconds:                 codexRetryPolicy.TTLSeconds,
 		OpenAICodexTicketRefreshBeforeSeconds:       codexRetryPolicy.RefreshBeforeSeconds,
@@ -2396,9 +2384,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAICodexTicketHarvestProxyURL:                       service.MaskProxyURL(updatedSettings.OpenAICodexTicketHarvestProxyURL),
 		OpenAICodexTicketHarvestProxyConfigured:                strings.TrimSpace(updatedSettings.OpenAICodexTicketHarvestProxyURL) != "" || len(updatedSettings.OpenAICodexTicketProxyPool) > 0,
 		OpenAICodexTicketProxyPool:                             service.MaskOpenAICodexTicketProxyPool(updatedSettings.OpenAICodexTicketProxyPool),
-		OpenAICodexTicketRetryCount:                            updatedSettings.OpenAICodexTicketRetryCount,
 		OpenAICodexTicketRetryIntervalSeconds:                  updatedSettings.OpenAICodexTicketRetryIntervalSeconds,
-		OpenAICodexTicketSteadyRetryIntervalSeconds:            updatedSettings.OpenAICodexTicketSteadyRetryIntervalSeconds,
 		OpenAICodexTicketManualRetryCooldownSeconds:            updatedSettings.OpenAICodexTicketManualRetryCooldownSeconds,
 		OpenAICodexTicketTTLSeconds:                            updatedSettings.OpenAICodexTicketTTLSeconds,
 		OpenAICodexTicketRefreshBeforeSeconds:                  updatedSettings.OpenAICodexTicketRefreshBeforeSeconds,

@@ -253,9 +253,7 @@ type SystemSettings struct {
 	OpenAICodexTicketEnabled                    bool   // Codex 292 打票总开关；关闭则不打票不注入
 	OpenAICodexTicketHarvestProxyURL            string // Codex 292 打票代理 URL；空则回退 yaml/env
 	OpenAICodexTicketProxyPool                  []OpenAICodexTicketProxy
-	OpenAICodexTicketRetryCount                 int
 	OpenAICodexTicketRetryIntervalSeconds       int
-	OpenAICodexTicketSteadyRetryIntervalSeconds int
 	OpenAICodexTicketManualRetryCooldownSeconds int
 	OpenAICodexTicketTTLSeconds                 int
 	OpenAICodexTicketRefreshBeforeSeconds       int

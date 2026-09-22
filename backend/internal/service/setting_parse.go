@@ -248,9 +248,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAICodexVersionAutoSyncEnabled:                  "true",
 		SettingKeyOpenAICodexTicketHarvestProxyURL:                   "",
 		SettingKeyOpenAICodexTicketProxyPool:                         "",
-		SettingKeyOpenAICodexTicketRetryCount:                        strconv.Itoa(OpenAICodexTicketRetryCountDefault),
 		SettingKeyOpenAICodexTicketRetryIntervalSeconds:              strconv.Itoa(OpenAICodexTicketRetryIntervalSecondsDefault),
-		SettingKeyOpenAICodexTicketSteadyRetryIntervalSeconds:        strconv.Itoa(OpenAICodexTicketSteadyRetryIntervalSecondsDefault),
 		SettingKeyOpenAICodexTicketManualRetryCooldownSeconds:        strconv.Itoa(OpenAICodexTicketManualRetryCooldownSecondsDefault),
 		SettingKeyOpenAICodexTicketTTLSeconds:                        strconv.Itoa(OpenAICodexTicketTTLSecondsDefault),
 		SettingKeyOpenAICodexTicketRefreshBeforeSeconds:              strconv.Itoa(OpenAICodexTicketRefreshBeforeSecondsDefault),
@@ -908,9 +906,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	ticketRuntime := parseOpenAICodexTicketRuntimePolicy(settings)
 	ticketRuntime.ProxyPool = resolveOpenAICodexTicketProxyPool(settings, "")
 	result.OpenAICodexTicketProxyPool = ticketRuntime.ProxyPool
-	result.OpenAICodexTicketRetryCount = ticketRuntime.RetryCount
 	result.OpenAICodexTicketRetryIntervalSeconds = ticketRuntime.RetryIntervalSeconds
-	result.OpenAICodexTicketSteadyRetryIntervalSeconds = ticketRuntime.SteadyRetryIntervalSeconds
 	result.OpenAICodexTicketManualRetryCooldownSeconds = ticketRuntime.ManualRetryCooldownSeconds
 	result.OpenAICodexTicketTTLSeconds = ticketRuntime.TTLSeconds
 	result.OpenAICodexTicketRefreshBeforeSeconds = ticketRuntime.RefreshBeforeSeconds

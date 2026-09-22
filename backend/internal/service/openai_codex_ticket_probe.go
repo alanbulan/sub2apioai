@@ -33,12 +33,11 @@ const (
 )
 
 type openAICodexTicketProbeResult struct {
-	State         string
-	Status        int
-	Verdict       openAICodexTicketProbeVerdict
-	ServedModel   string
-	RouteCookies  map[string]string
-	CookieUpdated bool
+	State        string
+	Status       int
+	Verdict      openAICodexTicketProbeVerdict
+	ServedModel  string
+	RouteCookies map[string]string
 }
 
 func (r openAICodexTicketProbeResult) verified() bool {
@@ -56,7 +55,6 @@ func inspectOpenAICodexTicketProbeResponse(resp *http.Response, requestedModel s
 	result.Status = resp.StatusCode
 	result.State = extractOpenAICodexTurnState(resp.Header)
 	result.RouteCookies = extractOpenAICodexRouteCookieValues(resp)
-	result.CookieUpdated = len(result.RouteCookies) > 0
 
 	switch {
 	case resp.StatusCode != http.StatusOK:

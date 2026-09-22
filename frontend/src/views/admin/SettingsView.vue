@@ -4626,22 +4626,24 @@
                           />
                         </label>
                       </div>
+                      <div class="flex items-center gap-3">
+                        <Toggle
+                          :model-value="Boolean(proxy.rotate_on_failure)"
+                          :aria-label="t('admin.settings.gatewayForwarding.codexTicketProxyRotateOnFailure')"
+                          @update:model-value="setCodexTicketProxyRotation(index, $event)"
+                        />
+                        <span class="text-xs font-medium text-gray-600 dark:text-gray-300">
+                          {{ t("admin.settings.gatewayForwarding.codexTicketProxyRotateOnFailure") }}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>
 
                 <div class="grid gap-4 border-t border-gray-100 pt-4 sm:grid-cols-2 dark:border-dark-700">
                   <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t("admin.settings.gatewayForwarding.codexTicketRetryCount") }}
-                    <input v-model.number="form.openai_codex_ticket_retry_count" type="number" min="1" max="100" class="input mt-2 w-full" />
-                  </label>
-                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
                     {{ t("admin.settings.gatewayForwarding.codexTicketRetryInterval") }}
                     <input v-model.number="form.openai_codex_ticket_retry_interval_seconds" type="number" min="5" max="86400" class="input mt-2 w-full" />
-                  </label>
-                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t("admin.settings.gatewayForwarding.codexTicketSteadyRetryInterval") }}
-                    <input v-model.number="form.openai_codex_ticket_steady_retry_interval_seconds" type="number" min="30" max="86400" class="input mt-2 w-full" />
                   </label>
                   <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
                     {{ t("admin.settings.gatewayForwarding.codexTicketManualCooldown") }}
@@ -10000,12 +10002,10 @@ const form = reactive<SettingsForm>({
   openai_codex_ticket_harvest_proxy_url: "",
   openai_codex_ticket_harvest_proxy_configured: false,
   openai_codex_ticket_proxy_pool: [] as OpenAICodexTicketProxy[],
-  openai_codex_ticket_retry_count: 8,
-  openai_codex_ticket_retry_interval_seconds: 60,
-  openai_codex_ticket_steady_retry_interval_seconds: 1800,
+  openai_codex_ticket_retry_interval_seconds: 6,
   openai_codex_ticket_manual_retry_cooldown_seconds: 60,
-  openai_codex_ticket_ttl_seconds: 240,
-  openai_codex_ticket_refresh_before_seconds: 60,
+  openai_codex_ticket_ttl_seconds: 70,
+  openai_codex_ticket_refresh_before_seconds: 30,
   // codex_cli_only 加固
   min_codex_version: "",
   max_codex_version: "",
@@ -11009,6 +11009,13 @@ function addCodexTicketProxy(): void {
     enabled: true,
     priority: 0,
     weight: 100,
+    rotate_on_failure: false,
+  });
+}
+
+function setCodexTicketProxyRotation(index: number, enabled: boolean): void {
+  form.openai_codex_ticket_proxy_pool.forEach((proxy, proxyIndex) => {
+    proxy.rotate_on_failure = enabled && proxyIndex === index;
   });
 }
 
@@ -11656,16 +11663,11 @@ async function saveSettings() {
           url: proxy.url.trim(),
           priority: Number(proxy.priority),
           weight: Number(proxy.weight),
+          rotate_on_failure: Boolean(proxy.rotate_on_failure),
         }),
-      ),
-      openai_codex_ticket_retry_count: Number(
-        form.openai_codex_ticket_retry_count,
       ),
       openai_codex_ticket_retry_interval_seconds: Number(
         form.openai_codex_ticket_retry_interval_seconds,
-      ),
-      openai_codex_ticket_steady_retry_interval_seconds: Number(
-        form.openai_codex_ticket_steady_retry_interval_seconds,
       ),
       openai_codex_ticket_manual_retry_cooldown_seconds: Number(
         form.openai_codex_ticket_manual_retry_cooldown_seconds,

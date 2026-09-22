@@ -26,7 +26,6 @@ type openAICodexTicketProxyPoolRuntime struct {
 type openAICodexTicketSelectedProxy struct {
 	proxy       OpenAICodexTicketProxy
 	fingerprint [sha256.Size]byte
-	singleNode  bool
 	release     func()
 }
 
@@ -162,9 +161,28 @@ func (r *openAICodexTicketProxyPoolRuntime) selectProxy(key string, settings Ope
 	return openAICodexTicketSelectedProxy{
 		proxy:       selected,
 		fingerprint: fingerprint,
-		singleNode:  len(enabled) == 1,
 		release:     release,
 	}, true
+}
+
+func (r *openAICodexTicketProxyPoolRuntime) selectProxies(key string, settings OpenAICodexTicketRuntimeSettings, now time.Time, limit int) []openAICodexTicketSelectedProxy {
+	enabledCount := len(enabledOpenAICodexTicketProxies(settings.ProxyPool))
+	if limit > enabledCount {
+		limit = enabledCount
+	}
+	if limit <= 0 {
+		return nil
+	}
+
+	selected := make([]openAICodexTicketSelectedProxy, 0, limit)
+	for len(selected) < limit {
+		proxy, ok := r.selectProxy(key, settings, now)
+		if !ok {
+			break
+		}
+		selected = append(selected, proxy)
+	}
+	return selected
 }
 
 func (r *openAICodexTicketProxyPoolRuntime) penalize(selection openAICodexTicketSelectedProxy, now time.Time, duration time.Duration) {

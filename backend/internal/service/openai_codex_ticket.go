@@ -30,10 +30,8 @@ const (
 	openAICodexTicketStatePrefix     = "gAAAAA"
 	openAICodexTicketDefaultModel    = "gpt-6-astra"
 	openAICodexTicketDefaultSolModel = "gpt-5.6-sol"
-	openAICodexTicketFinalRetryLead  = time.Minute
-	openAICodexTicketMinExpiryRetry  = 15 * time.Second
-	openAICodexTicketMaxExpiryRetry  = time.Minute
 	openAICodexTicketManualTimeout   = 15 * time.Second
+	openAICodexTicketProbeFanout     = 4
 
 	// A proxy URL containing this token gets an independent sticky session for
 	// every account/model pair. The token is replaced locally and is never sent
@@ -68,24 +66,23 @@ type openAICodexTicket struct {
 	Attempts   int       `json:"attempts"`
 }
 
-type openAICodexTicketProbeBackoff struct {
+type openAICodexTicketProbeState struct {
 	Failures         int
 	RetryAt          time.Time
 	ProxyFingerprint [sha256.Size]byte
-	Phase            openAICodexTicketRetryPhase
 	LastProbeReason  openAICodexTicketProbeVerdict
 	LastHTTPStatus   int
 	LastStateLength  int
 	LastServedModel  string
 }
 
-type openAICodexTicketRetryPhase uint8
-
-const (
-	openAICodexTicketRetryPhaseMissing openAICodexTicketRetryPhase = iota + 1
-	openAICodexTicketRetryPhaseRenewal
-	openAICodexTicketRetryPhaseExpiredRecovery
-)
+type openAICodexTicketProbeAttempt struct {
+	selection       openAICodexTicketSelectedProxy
+	proxyTemplate   string
+	proxySessionKey string
+	result          openAICodexTicketProbeResult
+	err             error
+}
 
 type openAICodexTicketProxySession struct {
 	ProxyFingerprint [sha256.Size]byte
@@ -142,8 +139,7 @@ func (s *OpenAIGatewayService) openAICodexTicketProbeProxyURL(key, proxyTemplate
 }
 
 // rotateOpenAICodexTicketProxySession changes only the failed account/model's
-// sticky session. Probe backoff remains keyed by the unchanged template, so a
-// rotation cannot bypass rate limiting and create a retry loop.
+// sticky session. The next pool pass therefore gets a different exit.
 func (s *OpenAIGatewayService) rotateOpenAICodexTicketProxySession(key, proxyTemplate string) int {
 	proxyTemplate = strings.TrimSpace(proxyTemplate)
 	if s == nil || !openAICodexTicketProxyUsesSessions(proxyTemplate) {
@@ -177,130 +173,53 @@ func (s *OpenAIGatewayService) markOpenAICodexTicketProxySessionSuccessful(key, 
 	}
 }
 
-func (s *OpenAIGatewayService) openAICodexTicketProbeBackedOffForSettings(key string, settings OpenAICodexTicketRuntimeSettings, now time.Time) bool {
+func (s *OpenAIGatewayService) openAICodexTicketProbeWaiting(key string, settings OpenAICodexTicketRuntimeSettings, now time.Time) bool {
 	if s == nil {
 		return false
 	}
-	raw, ok := s.openaiCodexTicketProbeBackoffs.Load(key)
+	raw, ok := s.openaiCodexTicketProbeStates.Load(key)
 	if !ok {
 		return false
 	}
-	state, ok := raw.(openAICodexTicketProbeBackoff)
+	state, ok := raw.(openAICodexTicketProbeState)
 	if !ok || state.ProxyFingerprint != settings.Fingerprint() {
-		s.openaiCodexTicketProbeBackoffs.Delete(key)
+		s.openaiCodexTicketProbeStates.Delete(key)
 		return false
 	}
 	return now.Before(state.RetryAt)
 }
 
-func openAICodexTicketRuntimeSettingsForProxyURL(proxyURL string) OpenAICodexTicketRuntimeSettings {
-	settings := DefaultOpenAICodexTicketRuntimeSettings()
-	settings.ProxyPool = syntheticOpenAICodexTicketProxy(openAICodexTicketLegacyProxyID, "Legacy proxy", proxyURL)
-	return settings
-}
-
-// Compatibility wrapper retained for focused unit tests and older internal
-// callers. Production harvesting passes the full runtime settings instead.
-func (s *OpenAIGatewayService) openAICodexTicketProbeBackedOff(key, proxyURL string, now time.Time) bool {
-	return s.openAICodexTicketProbeBackedOffForSettings(key, openAICodexTicketRuntimeSettingsForProxyURL(proxyURL), now)
-}
-
-func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailure(key, proxyURL string, now, ticketExpiresAt time.Time) openAICodexTicketProbeBackoff {
-	return s.recordOpenAICodexTicketProbeFailureWithSettings(key, openAICodexTicketRuntimeSettingsForProxyURL(proxyURL), now, ticketExpiresAt)
-}
-
-func openAICodexTicketRetryPhaseAt(now, ticketExpiresAt time.Time) openAICodexTicketRetryPhase {
-	if ticketExpiresAt.IsZero() {
-		return openAICodexTicketRetryPhaseMissing
-	}
-	if now.Before(ticketExpiresAt) {
-		return openAICodexTicketRetryPhaseRenewal
-	}
-	return openAICodexTicketRetryPhaseExpiredRecovery
-}
-
-func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailureWithSettings(key string, settings OpenAICodexTicketRuntimeSettings, now, ticketExpiresAt time.Time) openAICodexTicketProbeBackoff {
+func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeFailure(key string, settings OpenAICodexTicketRuntimeSettings, now time.Time) openAICodexTicketProbeState {
 	fingerprint := settings.Fingerprint()
-	phase := openAICodexTicketRetryPhaseAt(now, ticketExpiresAt)
 	failures := 1
-	if raw, ok := s.openaiCodexTicketProbeBackoffs.Load(key); ok {
-		if previous, valid := raw.(openAICodexTicketProbeBackoff); valid && previous.ProxyFingerprint == fingerprint && previous.Phase == phase {
+	if raw, ok := s.openaiCodexTicketProbeStates.Load(key); ok {
+		if previous, valid := raw.(openAICodexTicketProbeState); valid && previous.ProxyFingerprint == fingerprint {
 			failures = previous.Failures + 1
 		}
 	}
-	retryCount := normalizeOpenAICodexTicketRetryCount(settings.RetryCount)
-	delay := settings.RetryInterval()
-	if failures > retryCount {
-		delay = settings.SteadyRetryInterval()
-	}
-	retryAt := openAICodexTicketProbeRetryAt(now, ticketExpiresAt, delay)
-	state := openAICodexTicketProbeBackoff{
+	state := openAICodexTicketProbeState{
 		Failures:         failures,
-		RetryAt:          retryAt,
+		RetryAt:          now.Add(settings.RetryInterval()),
 		ProxyFingerprint: fingerprint,
-		Phase:            phase,
 	}
-	s.openaiCodexTicketProbeBackoffs.Store(key, state)
+	s.openaiCodexTicketProbeStates.Store(key, state)
 	return state
 }
 
 func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeDiagnostic(
-	account *Account,
-	model, key string,
+	key string,
 	settings OpenAICodexTicketRuntimeSettings,
 	reason openAICodexTicketProbeVerdict,
 	status, stateLength int,
 	servedModel string,
-) openAICodexTicketProbeBackoff {
-	state := s.recordOpenAICodexTicketProbeMissWithSettings(account, model, key, settings, s.openAICodexTicketConfig().TargetLength)
+) openAICodexTicketProbeState {
+	state := s.recordOpenAICodexTicketProbeFailure(key, settings, time.Now())
 	state.LastProbeReason = reason
 	state.LastHTTPStatus = status
 	state.LastStateLength = stateLength
 	state.LastServedModel = safeOpenAICodexTicketObservedModel(servedModel)
-	s.openaiCodexTicketProbeBackoffs.Store(key, state)
+	s.openaiCodexTicketProbeStates.Store(key, state)
 	return state
-}
-
-// Keep renewal aggressive only around expiry, then return stale tickets to a
-// low-traffic steady-state retry cadence.
-func openAICodexTicketProbeRetryAt(now, ticketExpiresAt time.Time, normalDelay time.Duration) time.Time {
-	if ticketExpiresAt.IsZero() {
-		return now.Add(normalDelay)
-	}
-
-	remaining := ticketExpiresAt.Sub(now)
-	if remaining > openAICodexTicketFinalRetryLead {
-		retryAt := now.Add(normalDelay)
-		finalPreExpiryAttempt := ticketExpiresAt.Add(-openAICodexTicketFinalRetryLead)
-		if retryAt.After(finalPreExpiryAttempt) {
-			return finalPreExpiryAttempt
-		}
-		return retryAt
-	}
-	if remaining > 0 {
-		delay := remaining / 2
-		if delay < openAICodexTicketMinExpiryRetry {
-			delay = openAICodexTicketMinExpiryRetry
-		}
-		if delay > openAICodexTicketMaxExpiryRetry {
-			delay = openAICodexTicketMaxExpiryRetry
-		}
-		return now.Add(delay)
-	}
-	return now.Add(normalDelay)
-}
-
-func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeMiss(account *Account, model, key, proxyURL string, targetLen int, useSessionRetry bool) openAICodexTicketProbeBackoff {
-	return s.recordOpenAICodexTicketProbeMissWithSettings(account, model, key, openAICodexTicketRuntimeSettingsForProxyURL(proxyURL), targetLen)
-}
-
-func (s *OpenAIGatewayService) recordOpenAICodexTicketProbeMissWithSettings(account *Account, model, key string, settings OpenAICodexTicketRuntimeSettings, targetLen int) openAICodexTicketProbeBackoff {
-	now := time.Now()
-	ticketExpiresAt := time.Time{}
-	if ticket := s.lookupOpenAICodexTicket(account, model); ticket.matches(targetLen) {
-		ticketExpiresAt = ticket.effectiveExpiresAt(settings.TTL())
-	}
-	return s.recordOpenAICodexTicketProbeFailureWithSettings(key, settings, now, ticketExpiresAt)
 }
 
 func extractOpenAICodexTicketModel(body []byte) string {
@@ -345,21 +264,38 @@ func (s *OpenAIGatewayService) openAICodexTicketProxyRotateURL() string {
 	return raw
 }
 
-func (s *OpenAIGatewayService) openAICodexTicketCanRotateFixedProxy(proxyTemplate string) bool {
-	return s != nil && s.httpUpstream != nil && !openAICodexTicketProxyUsesSessions(proxyTemplate) && s.openAICodexTicketProxyRotateURL() != ""
+func (s *OpenAIGatewayService) openAICodexTicketFixedProxyForRotation(settings OpenAICodexTicketRuntimeSettings) (OpenAICodexTicketProxy, bool) {
+	if s == nil || s.httpUpstream == nil || s.openAICodexTicketProxyRotateURL() == "" {
+		return OpenAICodexTicketProxy{}, false
+	}
+	enabled := enabledOpenAICodexTicketProxies(settings.ProxyPool)
+	if len(enabled) == 1 && !openAICodexTicketProxyUsesSessions(enabled[0].URL) {
+		return enabled[0], true
+	}
+	for _, proxy := range enabled {
+		if proxy.RotateOnFailure && !openAICodexTicketProxyUsesSessions(proxy.URL) {
+			return proxy, true
+		}
+	}
+	return OpenAICodexTicketProxy{}, false
+}
+
+func (s *OpenAIGatewayService) openAICodexTicketCanRotateFixedProxy(selected OpenAICodexTicketProxy, settings OpenAICodexTicketRuntimeSettings) bool {
+	rotatable, ok := s.openAICodexTicketFixedProxyForRotation(settings)
+	return ok && rotatable.ID == selected.ID &&
+		openAICodexTicketProxyFingerprint(rotatable.URL) == openAICodexTicketProxyFingerprint(selected.URL)
 }
 
 // rotateOpenAICodexTicketFixedProxy asks a fixed-proxy provider to change its
 // shared exit. It runs only after all probes in a cycle have completed, so one
 // model cannot change the IP underneath another model's in-flight request.
-func (s *OpenAIGatewayService) rotateOpenAICodexTicketFixedProxy(ctx context.Context, proxyTemplate string) (int, error) {
+func (s *OpenAIGatewayService) rotateOpenAICodexTicketFixedProxy(ctx context.Context, selected OpenAICodexTicketProxy) (int, error) {
 	rotateURL := s.openAICodexTicketProxyRotateURL()
-	if rotateURL == "" || !s.openAICodexTicketCanRotateFixedProxy(proxyTemplate) {
+	if rotateURL == "" {
 		return 0, errors.New("fixed proxy rotation is not configured")
 	}
 	runtimeSettings := s.openAICodexTicketRuntimeSettingsContext(ctx)
-	enabled := enabledOpenAICodexTicketProxies(runtimeSettings.ProxyPool)
-	if len(enabled) != 1 || openAICodexTicketProxyFingerprint(enabled[0].URL) != openAICodexTicketProxyFingerprint(proxyTemplate) {
+	if !s.openAICodexTicketCanRotateFixedProxy(selected, runtimeSettings) {
 		return 0, errors.New("harvest proxy changed before rotation")
 	}
 
@@ -371,7 +307,7 @@ func (s *OpenAIGatewayService) rotateOpenAICodexTicketFixedProxy(ctx context.Con
 	}
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAIHarvest))
 	req.Close = true
-	resp, err := s.httpUpstream.Do(req, proxyTemplate, 0, 1)
+	resp, err := s.httpUpstream.Do(req, selected.URL, 0, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -513,8 +449,8 @@ func (s *OpenAIGatewayService) OpenAICodexTicketStatuses(account *Account, cfg c
 		}
 
 		key := openAICodexTicketKey(account.ID, status.Model)
-		if raw, ok := s.openaiCodexTicketProbeBackoffs.Load(key); ok {
-			if state, valid := raw.(openAICodexTicketProbeBackoff); valid &&
+		if raw, ok := s.openaiCodexTicketProbeStates.Load(key); ok {
+			if state, valid := raw.(openAICodexTicketProbeState); valid &&
 				state.ProxyFingerprint == runtimeSettings.Fingerprint() {
 				if !status.Ready {
 					status.LastProbeReason = string(state.LastProbeReason)
@@ -796,12 +732,6 @@ func (s *OpenAIGatewayService) openAICodexTicketBlocksAccount(account *Account, 
 func (s *OpenAIGatewayService) fireOpenAICodexTicketProbe(ctx context.Context, account *Account, token, model, proxyURL string, attemptTimeout time.Duration) (openAICodexTicketProbeResult, error) {
 	attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 	defer cancel()
-	runtimeSettings := s.openAICodexTicketRuntimeSettingsContext(attemptCtx)
-	existingRouteCookie := s.lookupOpenAICodexRouteCookie(account)
-	ttl := runtimeSettings.TTL()
-	now := time.Now()
-	reuseRouteCookie := existingRouteCookie.valid(now, ttl) &&
-		!existingRouteCookie.needsRefresh(now, ttl, runtimeSettings.RefreshBefore())
 
 	body := []byte(`{"model":` + jsonString(model) + `,"store":false,"stream":true,"instructions":"Reply with exactly: pong","input":[{"role":"user","content":[{"type":"input_text","text":"ping"}]}]}`)
 	req, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, chatgptCodexURL, bytes.NewReader(body))
@@ -820,10 +750,11 @@ func (s *OpenAIGatewayService) fireOpenAICodexTicketProbe(ctx context.Context, a
 		return openAICodexTicketProbeResult{Verdict: openAICodexTicketProbeTransportError}, err
 	}
 	applyOpenAICodexTicketHarvestIdentity(req.Header, model)
-	if reuseRouteCookie {
-		applyOpenAICodexRouteCookieHeader(req.Header, existingRouteCookie)
-	}
+	req.Header.Del("Cookie")
 
+	// Harvest probes intentionally carry no Cookie. The ticket and routing Cookie
+	// are independent artifacts, and each successful probe must mint fresh routing
+	// state in its own response.
 	// Synthetic probes must use the dedicated no-reuse transport even when the
 	// production account is bound to a plugin. This also avoids reading pluginManager
 	// while handlers are still wiring it during gateway construction.
@@ -839,13 +770,7 @@ func (s *OpenAIGatewayService) fireOpenAICodexTicketProbe(ctx context.Context, a
 			_ = resp.Body.Close()
 		}
 	}()
-	result, inspectErr := inspectOpenAICodexTicketProbeResponse(resp, model, s.openAICodexTicketConfig().TargetLength)
-	if result.Verdict == openAICodexTicketProbeMissingCookie && reuseRouteCookie && existingRouteCookie.valid(time.Now(), ttl) {
-		result.RouteCookies = maps.Clone(existingRouteCookie.Values)
-		result.CookieUpdated = false
-		result.Verdict = openAICodexTicketProbeVerified
-	}
-	return result, inspectErr
+	return inspectOpenAICodexTicketProbeResponse(resp, model, s.openAICodexTicketConfig().TargetLength)
 }
 
 func jsonString(v string) string {
@@ -936,7 +861,7 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 		return
 	}
 	if !s.openAICodexTicketEnabledContext(ctx) {
-		s.openaiCodexTicketProbeBackoffs.Clear()
+		s.openaiCodexTicketProbeStates.Clear()
 		s.openaiCodexTicketProxySessions.Clear()
 		s.openaiCodexTicketManualRetries.Clear()
 		s.openaiCodexTicketProxyPool.clear()
@@ -944,7 +869,7 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 	}
 	runtimeSettings := s.openAICodexTicketRuntimeSettingsContext(ctx)
 	if runtimeSettings.EnabledProxyCount() == 0 {
-		s.openaiCodexTicketProbeBackoffs.Clear()
+		s.openaiCodexTicketProbeStates.Clear()
 		s.openaiCodexTicketProxySessions.Clear()
 		s.openaiCodexTicketManualRetries.Clear()
 		s.openaiCodexTicketProxyPool.clear()
@@ -967,7 +892,7 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 		if !openAICodexTicketProbeEligible(&account, now) {
 			for _, model := range cfg.Models {
 				key := openAICodexTicketKey(account.ID, normalizeOpenAICodexTicketModel(model))
-				s.openaiCodexTicketProbeBackoffs.Delete(key)
+				s.openaiCodexTicketProbeStates.Delete(key)
 				s.openaiCodexTicketManualRetries.Delete(key)
 				s.clearOpenAICodexTicketProxyKey(key)
 			}
@@ -987,7 +912,7 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 				continue
 			}
 			key := openAICodexTicketKey(account.ID, model)
-			if s.openAICodexTicketProbeBackedOffForSettings(key, runtimeSettings, now) {
+			if s.openAICodexTicketProbeWaiting(key, runtimeSettings, now) {
 				continue
 			}
 			if !routeCookieFresh {
@@ -1009,17 +934,14 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 	}
 	wg.Wait()
 	if rotateFixedProxy.Load() {
-		enabled := enabledOpenAICodexTicketProxies(runtimeSettings.ProxyPool)
-		proxyURL := ""
-		if len(enabled) == 1 {
-			proxyURL = enabled[0].URL
-		}
-		status, rotateErr := s.rotateOpenAICodexTicketFixedProxy(ctx, proxyURL)
+		proxy, _ := s.openAICodexTicketFixedProxyForRotation(runtimeSettings)
+		status, rotateErr := s.rotateOpenAICodexTicketFixedProxy(ctx, proxy)
 		if rotateErr != nil {
 			logger.L().Warn("openai_codex_ticket proxy rotation failed",
-				zap.Int("http", status), zap.Error(rotateErr))
+				zap.String("proxy_id", proxy.ID), zap.Int("http", status), zap.Error(rotateErr))
 		} else {
-			logger.L().Info("openai_codex_ticket proxy rotated", zap.Int("http", status))
+			logger.L().Info("openai_codex_ticket proxy rotated",
+				zap.String("proxy_id", proxy.ID), zap.Int("http", status))
 		}
 	}
 	if probed > 0 {
@@ -1027,9 +949,9 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 	}
 }
 
-// probeOnceOpenAICodexTicket 走打票代理打一发。命中合格 292（HTTP 200、长度==target、
-// gAAAAA 前缀）就落库；否则记 Info miss，交给下个周期重试。同一 key 并发去重，避免上一发还没
-// 回来又叠一发。
+// probeOnceOpenAICodexTicket races up to four distinct proxy exits. The first
+// verified ticket wins and cancels the remaining attempts. A full miss counts
+// as one retry round regardless of the number of exits tried.
 func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, account *Account, model string) bool {
 	return s.probeOnceOpenAICodexTicketWithSettings(ctx, account, model, s.openAICodexTicketRuntimeSettingsContext(ctx))
 }
@@ -1048,113 +970,151 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicketWithSettings(ctx contex
 	result, _, _ := s.openaiCodexTicketFlight.Do(key, func() (any, error) {
 		token, _, err := s.GetAccessToken(ctx, account)
 		if err != nil || strings.TrimSpace(token) == "" {
-			backoff := s.recordOpenAICodexTicketProbeDiagnostic(
-				account, model, key, runtimeSettings,
+			probeState := s.recordOpenAICodexTicketProbeDiagnostic(
+				key, runtimeSettings,
 				openAICodexTicketProbeTokenError, 0, 0, "",
 			)
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.String("reason", string(openAICodexTicketProbeTokenError)), zap.Error(err),
-				zap.Int("failures", backoff.Failures), zap.Int64("retry_in_seconds", int64(time.Until(backoff.RetryAt)/time.Second)))
+				zap.Int("failures", probeState.Failures), zap.Int64("retry_in_seconds", int64(time.Until(probeState.RetryAt)/time.Second)))
 			return false, nil
 		}
-		selection, ok := s.openaiCodexTicketProxyPool.selectProxy(key, runtimeSettings, time.Now())
-		if !ok {
+		selections := s.openaiCodexTicketProxyPool.selectProxies(key, runtimeSettings, time.Now(), openAICodexTicketProbeFanout)
+		if len(selections) == 0 {
 			return false, nil
 		}
-		defer selection.release()
-		proxyTemplate := selection.proxy.URL
-		proxySessionKey := openAICodexTicketProxySessionKey(key, selection.proxy.ID)
-		proxyURL := s.openAICodexTicketProbeProxyURL(proxySessionKey, proxyTemplate)
-		probeResult, perr := s.fireOpenAICodexTicketProbe(ctx, account, token, model, proxyURL, time.Duration(cfg.HarvestAttemptTimeoutSeconds)*time.Second)
-		if perr != nil {
-			s.openaiCodexTicketProxyPool.penalize(selection, time.Now(), openAICodexTicketProxyPenalty(runtimeSettings))
-			rotations := s.rotateOpenAICodexTicketProxySession(proxySessionKey, proxyTemplate)
-			rotateFixedProxy := selection.singleNode && rotations == 0 && s.openAICodexTicketCanRotateFixedProxy(proxyTemplate)
-			backoff := s.recordOpenAICodexTicketProbeDiagnostic(
-				account, model, key, runtimeSettings,
-				openAICodexTicketProbeTransportError, probeResult.Status, len(probeResult.State), probeResult.ServedModel,
-			)
-			logger.L().Info("openai_codex_ticket probe miss",
-				zap.Int64("account_id", account.ID), zap.String("model", model),
-				zap.String("proxy_id", selection.proxy.ID),
-				zap.String("reason", string(openAICodexTicketProbeTransportError)), zap.Error(perr),
-				zap.Bool("proxy_session_rotated", rotations > 0), zap.Int("proxy_session_rotations", rotations),
-				zap.Bool("proxy_rotation_requested", rotateFixedProxy),
-				zap.Int("failures", backoff.Failures), zap.Int64("retry_in_seconds", int64(time.Until(backoff.RetryAt)/time.Second)))
+
+		roundCtx, cancelRound := context.WithCancel(ctx)
+		defer cancelRound()
+		attempts := make(chan openAICodexTicketProbeAttempt, len(selections))
+		for _, selection := range selections {
+			selection := selection
+			proxyTemplate := selection.proxy.URL
+			proxySessionKey := openAICodexTicketProxySessionKey(key, selection.proxy.ID)
+			proxyURL := s.openAICodexTicketProbeProxyURL(proxySessionKey, proxyTemplate)
+			go func() {
+				defer selection.release()
+				probeResult, probeErr := s.fireOpenAICodexTicketProbe(
+					roundCtx, account, token, model, proxyURL,
+					time.Duration(cfg.HarvestAttemptTimeoutSeconds)*time.Second,
+				)
+				attempts <- openAICodexTicketProbeAttempt{
+					selection:       selection,
+					proxyTemplate:   proxyTemplate,
+					proxySessionKey: proxySessionKey,
+					result:          probeResult,
+					err:             probeErr,
+				}
+			}()
+		}
+
+		rotateFixedProxy := false
+		var diagnostic openAICodexTicketProbeAttempt
+		harvested := false
+		completed := 0
+		for completed < len(selections) {
+			attempt := <-attempts
+			completed++
+			if !harvested && attempt.err == nil && attempt.result.verified() {
+				cancelRound()
+				now := time.Now()
+				ttl := runtimeSettings.TTL()
+				routeCookie := newOpenAICodexRouteCookie(account.ID, attempt.result.RouteCookies, now, ttl)
+				if routeCookie.valid(now, ttl) {
+					s.openaiCodexTicketProbeStates.Delete(key)
+					s.openaiCodexTicketProxyPool.clearAttempts(key)
+					s.markOpenAICodexTicketProxySessionSuccessful(attempt.proxySessionKey, attempt.proxyTemplate)
+					ticket := &openAICodexTicket{
+						AccountID:  account.ID,
+						Model:      model,
+						State:      attempt.result.State,
+						Length:     len(attempt.result.State),
+						CapturedAt: now,
+						ExpiresAt:  now.Add(ttl),
+						Attempts:   completed,
+					}
+					s.storeOpenAICodexTicket(ctx, account, ticket, routeCookie)
+					logger.L().Info("openai_codex_ticket harvested",
+						zap.Int64("account_id", account.ID), zap.String("model", model),
+						zap.String("proxy_id", attempt.selection.proxy.ID),
+						zap.Int("length", ticket.Length), zap.Int("cookie_count", len(routeCookie.Values)),
+						zap.Bool("cookie_updated", true), zap.Int("fanout", len(selections)),
+						zap.Int("completed_attempts", completed), zap.String("mode", "continuous"))
+					harvested = true
+					continue
+				}
+				attempt.result.Verdict = openAICodexTicketProbeMissingCookie
+			}
+			if harvested && attempt.err == nil && attempt.result.verified() {
+				continue
+			}
+
+			if attempt.err != nil && errors.Is(attempt.err, context.Canceled) {
+				continue
+			}
+			diagnostic = attempt
+			if s.handleOpenAICodexTicketProbeFailure(account, model, runtimeSettings, attempt) {
+				rotateFixedProxy = true
+			}
+		}
+
+		if harvested {
 			return rotateFixedProxy, nil
 		}
-		if !probeResult.verified() {
-			rotations := 0
-			rotateFixedProxy := false
-			// A 200 response with the wrong turn-state is the observed signal for
-			// an unsuitable egress IP. A 403 is also exit-specific for providers
-			// with an explicit rotate endpoint. HTTP 400 remains an account/request
-			// failure and must not consume a new proxy exit.
-			if probeResult.Status == http.StatusOK || probeResult.Status == http.StatusForbidden {
-				rotations = s.rotateOpenAICodexTicketProxySession(proxySessionKey, proxyTemplate)
-				rotateFixedProxy = selection.singleNode && rotations == 0 && s.openAICodexTicketCanRotateFixedProxy(proxyTemplate)
-			}
-			if probeResult.Status == http.StatusForbidden {
-				s.openaiCodexTicketProxyPool.penalize(selection, time.Now(), openAICodexTicketProxyPenalty(runtimeSettings))
-			}
-			backoff := s.recordOpenAICodexTicketProbeDiagnostic(
-				account, model, key, runtimeSettings,
-				probeResult.Verdict, probeResult.Status, len(probeResult.State), probeResult.ServedModel,
-			)
-			logger.L().Info("openai_codex_ticket probe miss",
-				zap.Int64("account_id", account.ID), zap.String("model", model),
-				zap.String("proxy_id", selection.proxy.ID),
-				zap.String("reason", string(probeResult.Verdict)),
-				zap.Int("http", probeResult.Status), zap.Int("len", len(probeResult.State)),
-				zap.String("served_model", probeResult.ServedModel),
-				zap.Bool("proxy_session_rotated", rotations > 0), zap.Int("proxy_session_rotations", rotations),
-				zap.Bool("proxy_rotation_requested", rotateFixedProxy),
-				zap.Int("failures", backoff.Failures), zap.Int64("retry_in_seconds", int64(time.Until(backoff.RetryAt)/time.Second)))
+		if ctx.Err() != nil {
 			return rotateFixedProxy, nil
 		}
-		s.openaiCodexTicketProbeBackoffs.Delete(key)
-		s.openaiCodexTicketProxyPool.clearAttempts(key)
-		s.markOpenAICodexTicketProxySessionSuccessful(proxySessionKey, proxyTemplate)
-		now := time.Now()
-		ttl := runtimeSettings.TTL()
-		routeCookie := s.lookupOpenAICodexRouteCookie(account)
-		var routeCookieUpdate *openAICodexRouteCookie
-		if probeResult.CookieUpdated {
-			routeCookie = newOpenAICodexRouteCookie(account.ID, probeResult.RouteCookies, now, ttl)
-			routeCookieUpdate = routeCookie
+		reason := diagnostic.result.Verdict
+		if diagnostic.err != nil || reason == "" {
+			reason = openAICodexTicketProbeTransportError
 		}
-		if !routeCookie.valid(now, ttl) {
-			backoff := s.recordOpenAICodexTicketProbeDiagnostic(
-				account, model, key, runtimeSettings,
-				openAICodexTicketProbeMissingCookie, probeResult.Status, len(probeResult.State), probeResult.ServedModel,
-			)
-			logger.L().Info("openai_codex_ticket probe miss",
-				zap.Int64("account_id", account.ID), zap.String("model", model),
-				zap.String("proxy_id", selection.proxy.ID),
-				zap.String("reason", string(openAICodexTicketProbeMissingCookie)),
-				zap.Int("http", probeResult.Status), zap.Int("len", len(probeResult.State)),
-				zap.Int("failures", backoff.Failures), zap.Int64("retry_in_seconds", int64(time.Until(backoff.RetryAt)/time.Second)))
-			return false, nil
-		}
-		ticket := &openAICodexTicket{
-			AccountID:  account.ID,
-			Model:      model,
-			State:      probeResult.State,
-			Length:     len(probeResult.State),
-			CapturedAt: now,
-			ExpiresAt:  now.Add(ttl),
-			Attempts:   1,
-		}
-		s.storeOpenAICodexTicket(ctx, account, ticket, routeCookieUpdate)
-		logger.L().Info("openai_codex_ticket harvested",
+		probeState := s.recordOpenAICodexTicketProbeDiagnostic(
+			key, runtimeSettings, reason, diagnostic.result.Status,
+			len(diagnostic.result.State), diagnostic.result.ServedModel,
+		)
+		logger.L().Info("openai_codex_ticket probe round miss",
 			zap.Int64("account_id", account.ID), zap.String("model", model),
-			zap.String("proxy_id", selection.proxy.ID),
-			zap.Int("length", ticket.Length), zap.Int("cookie_count", len(routeCookie.Values)),
-			zap.Bool("cookie_updated", probeResult.CookieUpdated), zap.String("mode", "continuous"))
-		return false, nil
+			zap.Int("attempts", completed), zap.String("reason", string(reason)),
+			zap.Int("http", diagnostic.result.Status), zap.Int("len", len(diagnostic.result.State)),
+			zap.String("served_model", diagnostic.result.ServedModel),
+			zap.Bool("proxy_rotation_requested", rotateFixedProxy),
+			zap.Int("failures", probeState.Failures),
+			zap.Int64("retry_in_seconds", int64(time.Until(probeState.RetryAt)/time.Second)))
+		return rotateFixedProxy, nil
 	})
 	rotateFixedProxy, _ := result.(bool)
+	return rotateFixedProxy
+}
+
+func (s *OpenAIGatewayService) handleOpenAICodexTicketProbeFailure(
+	account *Account,
+	model string,
+	runtimeSettings OpenAICodexTicketRuntimeSettings,
+	attempt openAICodexTicketProbeAttempt,
+) bool {
+	reason := attempt.result.Verdict
+	if attempt.err != nil || reason == "" {
+		reason = openAICodexTicketProbeTransportError
+	}
+	rotateExit := attempt.err != nil || attempt.result.Status == http.StatusOK || attempt.result.Status == http.StatusForbidden
+	rotations := 0
+	rotateFixedProxy := false
+	if rotateExit {
+		rotations = s.rotateOpenAICodexTicketProxySession(attempt.proxySessionKey, attempt.proxyTemplate)
+		rotateFixedProxy = rotations == 0 && s.openAICodexTicketCanRotateFixedProxy(attempt.selection.proxy, runtimeSettings)
+	}
+	if attempt.err != nil || attempt.result.Status == http.StatusForbidden {
+		s.openaiCodexTicketProxyPool.penalize(attempt.selection, time.Now(), openAICodexTicketProxyPenalty(runtimeSettings))
+	}
+	logger.L().Info("openai_codex_ticket probe attempt miss",
+		zap.Int64("account_id", account.ID), zap.String("model", model),
+		zap.String("proxy_id", attempt.selection.proxy.ID),
+		zap.String("reason", string(reason)), zap.Error(attempt.err),
+		zap.Int("http", attempt.result.Status), zap.Int("len", len(attempt.result.State)),
+		zap.String("served_model", attempt.result.ServedModel),
+		zap.Bool("proxy_session_rotated", rotations > 0), zap.Int("proxy_session_rotations", rotations),
+		zap.Bool("proxy_rotation_requested", rotateFixedProxy))
 	return rotateFixedProxy
 }
 
@@ -1182,8 +1142,8 @@ func (s *OpenAIGatewayService) clearOpenAICodexTicketProxyKey(key string) {
 }
 
 // RequestOpenAICodexTicketRetry schedules one immediate probe for a single
-// account/model. It bypasses the automatic backoff once, while a separate
-// cooldown and the existing singleflight guard prevent click-driven loops.
+// account/model. A separate cooldown and the existing singleflight guard
+// prevent click-driven loops.
 func (s *OpenAIGatewayService) RequestOpenAICodexTicketRetry(ctx context.Context, account *Account, model string) (time.Time, error) {
 	if s == nil || !s.openAICodexTicketEnabledContext(ctx) {
 		return time.Time{}, ErrOpenAICodexTicketRetryDisabled
@@ -1222,9 +1182,9 @@ func (s *OpenAIGatewayService) RequestOpenAICodexTicketRetry(ctx context.Context
 		return retryAt, ErrOpenAICodexTicketRetryCooldown
 	}
 
-	// The manual action owns only this account/model. Clearing its automatic
-	// backoff does not release or alter any other key.
-	s.openaiCodexTicketProbeBackoffs.Delete(key)
+	// The manual action owns only this account/model. Clearing its retry wait
+	// does not release or alter any other key.
+	s.openaiCodexTicketProbeStates.Delete(key)
 	probeAccount := *account
 	probeAccount.Extra = maps.Clone(account.Extra)
 	probeAccount.Credentials = maps.Clone(account.Credentials)
@@ -1237,16 +1197,12 @@ func (s *OpenAIGatewayService) RequestOpenAICodexTicketRetry(ctx context.Context
 		defer cancel()
 		rotateFixedProxy := s.probeOnceOpenAICodexTicketWithSettings(probeCtx, &probeAccount, model, runtimeSettings)
 		if rotateFixedProxy {
-			enabled := enabledOpenAICodexTicketProxies(runtimeSettings.ProxyPool)
-			proxyURL := ""
-			if len(enabled) == 1 {
-				proxyURL = enabled[0].URL
-			}
-			status, err := s.rotateOpenAICodexTicketFixedProxy(probeCtx, proxyURL)
+			proxy, _ := s.openAICodexTicketFixedProxyForRotation(runtimeSettings)
+			status, err := s.rotateOpenAICodexTicketFixedProxy(probeCtx, proxy)
 			if err != nil {
 				logger.L().Warn("openai_codex_ticket manual proxy rotation failed",
 					zap.Int64("account_id", account.ID), zap.String("model", model),
-					zap.Int("http", status), zap.Error(err))
+					zap.String("proxy_id", proxy.ID), zap.Int("http", status), zap.Error(err))
 			}
 		}
 		ready := false

@@ -512,7 +512,7 @@ type OpenAIGatewayService struct {
 	// openaiCodexRouteCookies: accountID → *openAICodexRouteCookie，账号级路由 Cookie。
 	openaiCodexTickets             sync.Map
 	openaiCodexRouteCookies        sync.Map
-	openaiCodexTicketProbeBackoffs sync.Map
+	openaiCodexTicketProbeStates   sync.Map
 	openaiCodexTicketProxySessions sync.Map
 	openaiCodexTicketProbing       sync.Map
 	openaiCodexTicketManualRetries sync.Map

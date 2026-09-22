@@ -496,9 +496,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	}
 	updates[SettingKeyOpenAICodexTicketProxyPool] = proxyPoolJSON
 	ticketRuntime := OpenAICodexTicketRuntimeSettings{
-		RetryCount:                 settings.OpenAICodexTicketRetryCount,
 		RetryIntervalSeconds:       settings.OpenAICodexTicketRetryIntervalSeconds,
-		SteadyRetryIntervalSeconds: settings.OpenAICodexTicketSteadyRetryIntervalSeconds,
 		ManualRetryCooldownSeconds: settings.OpenAICodexTicketManualRetryCooldownSeconds,
 		TTLSeconds:                 settings.OpenAICodexTicketTTLSeconds,
 		RefreshBeforeSeconds:       settings.OpenAICodexTicketRefreshBeforeSeconds,
@@ -507,17 +505,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	// these fields existed. HTTP requests are merged and validated by the handler,
 	// so an explicitly submitted zero is still rejected there.
 	defaults := DefaultOpenAICodexTicketRuntimeSettings()
-	if ticketRuntime.RetryCount == 0 {
-		ticketRuntime.RetryCount = defaults.RetryCount
-		settings.OpenAICodexTicketRetryCount = defaults.RetryCount
-	}
 	if ticketRuntime.RetryIntervalSeconds == 0 {
 		ticketRuntime.RetryIntervalSeconds = defaults.RetryIntervalSeconds
 		settings.OpenAICodexTicketRetryIntervalSeconds = defaults.RetryIntervalSeconds
-	}
-	if ticketRuntime.SteadyRetryIntervalSeconds == 0 {
-		ticketRuntime.SteadyRetryIntervalSeconds = defaults.SteadyRetryIntervalSeconds
-		settings.OpenAICodexTicketSteadyRetryIntervalSeconds = defaults.SteadyRetryIntervalSeconds
 	}
 	if ticketRuntime.ManualRetryCooldownSeconds == 0 {
 		ticketRuntime.ManualRetryCooldownSeconds = defaults.ManualRetryCooldownSeconds
@@ -534,9 +524,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	if err := validateOpenAICodexTicketRuntimePolicy(ticketRuntime); err != nil {
 		return nil, infraerrors.BadRequest("INVALID_CODEX_TICKET_RETRY_POLICY", err.Error())
 	}
-	updates[SettingKeyOpenAICodexTicketRetryCount] = strconv.Itoa(ticketRuntime.RetryCount)
 	updates[SettingKeyOpenAICodexTicketRetryIntervalSeconds] = strconv.Itoa(ticketRuntime.RetryIntervalSeconds)
-	updates[SettingKeyOpenAICodexTicketSteadyRetryIntervalSeconds] = strconv.Itoa(ticketRuntime.SteadyRetryIntervalSeconds)
 	updates[SettingKeyOpenAICodexTicketManualRetryCooldownSeconds] = strconv.Itoa(ticketRuntime.ManualRetryCooldownSeconds)
 	updates[SettingKeyOpenAICodexTicketTTLSeconds] = strconv.Itoa(ticketRuntime.TTLSeconds)
 	updates[SettingKeyOpenAICodexTicketRefreshBeforeSeconds] = strconv.Itoa(ticketRuntime.RefreshBeforeSeconds)

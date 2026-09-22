@@ -86,13 +86,13 @@ func TestSettingsCodexTicketExplicitEmptyPoolClearsLegacyProxy(t *testing.T) {
 
 func TestSettingsCodexTicketRejectsInvalidRetryPolicy(t *testing.T) {
 	h, repo := newStepUpSwitchTestHandler(t, map[string]string{
-		service.SettingKeyOpenAICodexTicketRetryCount: "8",
+		service.SettingKeyOpenAICodexTicketRetryIntervalSeconds: "6",
 	})
 	rec := doUpdateSettings(t, h, map[string]any{
-		service.SettingKeyOpenAICodexTicketRetryCount: 0,
+		service.SettingKeyOpenAICodexTicketRetryIntervalSeconds: 0,
 	}, nil)
 	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
-	require.Equal(t, "8", repo.values[service.SettingKeyOpenAICodexTicketRetryCount])
+	require.Equal(t, "6", repo.values[service.SettingKeyOpenAICodexTicketRetryIntervalSeconds])
 }
 
 func TestSettingsCodexTicketRejectInvalidProxyWithoutLeakingPassword(t *testing.T) {

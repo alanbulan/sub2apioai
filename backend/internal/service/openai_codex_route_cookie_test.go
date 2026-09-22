@@ -39,6 +39,28 @@ func TestCodexTicketProbeRequiresRouteCookie(t *testing.T) {
 	require.Equal(t, "route-test", ready.RouteCookies["__cflb"])
 }
 
+func TestCodexTicketProbeDoesNotSendStoredRouteCookie(t *testing.T) {
+	var sentCookie string
+	upstream := &codexTicketFuncUpstream{do: func(req *http.Request) (*http.Response, error) {
+		sentCookie = req.Header.Get("Cookie")
+		return codexTicketResponse(), nil
+	}}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled:      true,
+		TargetLength: 292,
+	}, upstream)
+	account := ticketTestAccount(41)
+
+	result, err := svc.fireOpenAICodexTicketProbe(
+		context.Background(), account, "token", "gpt-6-astra", "http://proxy.example:8080", time.Second,
+	)
+
+	require.NoError(t, err)
+	require.True(t, result.verified())
+	require.True(t, hasOpenAICodexRoutingCookie(result.RouteCookies))
+	require.Empty(t, sentCookie)
+}
+
 func TestApplyCodexTicketMergesRouteCookies(t *testing.T) {
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
 		Enabled:      true,
@@ -66,6 +88,30 @@ func TestApplyCodexTicketMergesRouteCookies(t *testing.T) {
 	require.Equal(t, "keep", values["client"])
 	require.Equal(t, "route-test", values["__cflb"])
 	require.Equal(t, "origin-test", values["__oailb"])
+}
+
+func TestCodexTicketsShareLatestRouteCookieWithinAccount(t *testing.T) {
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled: true, TargetLength: 292, TTLSeconds: 3600, FailClosed: true,
+	}, nil)
+	account := ticketTestAccount(41)
+	now := time.Now()
+	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol"} {
+		svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
+			AccountID: account.ID, Model: model, State: fakeCodexTicketState(292), Length: 292,
+			CapturedAt: now, ExpiresAt: now.Add(time.Hour),
+		}, nil)
+	}
+	svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
+		AccountID: account.ID, Model: "gpt-5.6-sol", State: fakeCodexTicketState(292), Length: 292,
+		CapturedAt: now, ExpiresAt: now.Add(time.Hour),
+	}, newOpenAICodexRouteCookie(account.ID, map[string]string{"__oailb": "latest-route"}, now.Add(time.Second), time.Hour))
+
+	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol"} {
+		header := http.Header{}
+		require.NoError(t, svc.applyOpenAICodexTicket(context.Background(), account, model, header))
+		require.Contains(t, header.Get("Cookie"), "__oailb=latest-route")
+	}
 }
 
 func TestCodexTicketPolicyClampsLegacyHourState(t *testing.T) {

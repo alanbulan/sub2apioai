@@ -80,22 +80,16 @@ func TestCodexTicketProbeBypassesPluginDuringWiring(t *testing.T) {
 
 func TestCodexTicketProbeDoesNotReuseCookieNearExpiry(t *testing.T) {
 	tests := []struct {
-		name        string
-		capturedAt  time.Time
-		wantCookie  bool
-		wantVerdict openAICodexTicketProbeVerdict
+		name       string
+		capturedAt time.Time
 	}{
 		{
-			name:        "fresh cookie",
-			capturedAt:  time.Now(),
-			wantCookie:  true,
-			wantVerdict: openAICodexTicketProbeVerified,
+			name:       "fresh cookie",
+			capturedAt: time.Now(),
 		},
 		{
-			name:        "refresh window",
-			capturedAt:  time.Now().Add(-181 * time.Second),
-			wantCookie:  false,
-			wantVerdict: openAICodexTicketProbeMissingCookie,
+			name:       "refresh window",
+			capturedAt: time.Now().Add(-181 * time.Second),
 		},
 	}
 
@@ -113,9 +107,10 @@ func TestCodexTicketProbeDoesNotReuseCookieNearExpiry(t *testing.T) {
 				for _, cookie := range req.Cookies() {
 					receivedCookie = receivedCookie || cookie.Name == "__cflb"
 				}
-				require.Equal(t, testCase.wantCookie, receivedCookie)
+				require.False(t, receivedCookie)
 				header := http.Header{}
 				header.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
+				addCodexTicketTestRouteCookies(header)
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Header:     header,
@@ -132,7 +127,7 @@ func TestCodexTicketProbeDoesNotReuseCookieNearExpiry(t *testing.T) {
 				context.Background(), account, "test-token", "gpt-6-astra", "", time.Second,
 			)
 			require.NoError(t, err)
-			require.Equal(t, testCase.wantVerdict, result.Verdict)
+			require.Equal(t, openAICodexTicketProbeVerified, result.Verdict)
 		})
 	}
 }

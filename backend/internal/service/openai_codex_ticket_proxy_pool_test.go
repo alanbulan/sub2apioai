@@ -76,7 +76,33 @@ func TestOpenAICodexTicketProxyPoolFailsOverPerKeyAndPriorityTier(t *testing.T) 
 	require.Contains(t, []string{"first", "second"}, selected.proxy.ID)
 }
 
-func TestOpenAICodexTicketPoolFingerprintKeepsBackoffAcrossNodeChanges(t *testing.T) {
+func TestOpenAICodexTicketProxyPoolSelectsDistinctFanout(t *testing.T) {
+	settings := DefaultOpenAICodexTicketRuntimeSettings()
+	settings.ProxyPool = []OpenAICodexTicketProxy{
+		testCodexProxy("first", 0, 1),
+		testCodexProxy("second", 0, 1),
+		testCodexProxy("third", 10, 1),
+		testCodexProxy("fourth", 20, 1),
+	}
+	var runtime openAICodexTicketProxyPoolRuntime
+	selected := runtime.selectProxies("same-key", settings, time.Now(), openAICodexTicketProbeFanout)
+	require.Len(t, selected, openAICodexTicketProbeFanout)
+	ids := make([]string, 0, len(selected))
+	for _, proxy := range selected {
+		ids = append(ids, proxy.proxy.ID)
+		proxy.release()
+	}
+	require.ElementsMatch(t, []string{"first", "second", "third", "fourth"}, ids)
+}
+
+func TestOpenAICodexTicketRuntimeDefaultsUseShortObservedLifetime(t *testing.T) {
+	settings := DefaultOpenAICodexTicketRuntimeSettings()
+	require.Equal(t, 70*time.Second, settings.TTL())
+	require.Equal(t, 30*time.Second, settings.RefreshBefore())
+	require.Equal(t, 6*time.Second, settings.RetryInterval())
+}
+
+func TestOpenAICodexTicketPoolFingerprintResetsRetryWaitAcrossNodeChanges(t *testing.T) {
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{}, nil)
 	settings := DefaultOpenAICodexTicketRuntimeSettings()
 	settings.ProxyPool = []OpenAICodexTicketProxy{
@@ -85,19 +111,19 @@ func TestOpenAICodexTicketPoolFingerprintKeepsBackoffAcrossNodeChanges(t *testin
 	}
 	key := openAICodexTicketKey(41, "gpt-6-astra")
 	now := time.Now()
-	svc.recordOpenAICodexTicketProbeFailureWithSettings(key, settings, now, time.Time{})
+	svc.recordOpenAICodexTicketProbeFailure(key, settings, now)
 
 	first, _ := svc.openaiCodexTicketProxyPool.selectProxy(key, settings, now)
 	first.release()
 	second, _ := svc.openaiCodexTicketProxyPool.selectProxy(key, settings, now)
 	second.release()
 	require.NotEqual(t, first.proxy.ID, second.proxy.ID)
-	require.True(t, svc.openAICodexTicketProbeBackedOffForSettings(key, settings, now))
+	require.True(t, svc.openAICodexTicketProbeWaiting(key, settings, now))
 
 	changed := settings
 	changed.ProxyPool = append([]OpenAICodexTicketProxy(nil), settings.ProxyPool...)
 	changed.ProxyPool[0].Weight = 2
-	require.False(t, svc.openAICodexTicketProbeBackedOffForSettings(key, changed, now))
+	require.False(t, svc.openAICodexTicketProbeWaiting(key, changed, now))
 }
 
 func TestOpenAICodexTicketProxyPoolMaskedCredentialReconciliation(t *testing.T) {
@@ -115,6 +141,19 @@ func TestOpenAICodexTicketProxyPoolMaskedCredentialReconciliation(t *testing.T) 
 	_, err = ReconcileOpenAICodexTicketProxyPool(next, previous)
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "secret")
+}
+
+func TestOpenAICodexTicketProxyPoolAllowsOnlyOneFixedIPRotator(t *testing.T) {
+	first := testCodexProxy("first", 0, 1)
+	first.RotateOnFailure = true
+	second := testCodexProxy("second", 0, 1)
+	second.RotateOnFailure = true
+	require.Error(t, ValidateOpenAICodexTicketProxyPool([]OpenAICodexTicketProxy{first, second}))
+
+	session := testCodexProxy("session", 0, 1)
+	session.URL = "http://user_" + openAICodexTicketProxySessionPlaceholder + ":secret@session.example:8080"
+	session.RotateOnFailure = true
+	require.Error(t, ValidateOpenAICodexTicketProxyPool([]OpenAICodexTicketProxy{session}))
 }
 
 func TestOpenAICodexTicketProxyPoolLegacyMigrationAndExplicitEmpty(t *testing.T) {
@@ -138,9 +177,7 @@ func TestOpenAICodexTicketRuntimeSettingsLoadPolicyAndPool(t *testing.T) {
 	require.NoError(t, err)
 	repo := &codexTicketSettingRepo{codexPolicyMigrationRepoStub: &codexPolicyMigrationRepoStub{values: map[string]string{
 		SettingKeyOpenAICodexTicketProxyPool:                  string(rawPool),
-		SettingKeyOpenAICodexTicketRetryCount:                 "12",
 		SettingKeyOpenAICodexTicketRetryIntervalSeconds:       "45",
-		SettingKeyOpenAICodexTicketSteadyRetryIntervalSeconds: "900",
 		SettingKeyOpenAICodexTicketManualRetryCooldownSeconds: "75",
 		SettingKeyOpenAICodexTicketTTLSeconds:                 "240",
 		SettingKeyOpenAICodexTicketRefreshBeforeSeconds:       "60",
@@ -148,9 +185,7 @@ func TestOpenAICodexTicketRuntimeSettingsLoadPolicyAndPool(t *testing.T) {
 	settings := NewSettingService(repo, &config.Config{})
 	fallback := DefaultOpenAICodexTicketRuntimeSettings()
 	got := settings.GetOpenAICodexTicketRuntimeSettings(context.Background(), fallback)
-	require.Equal(t, 12, got.RetryCount)
 	require.Equal(t, 45, got.RetryIntervalSeconds)
-	require.Equal(t, 900, got.SteadyRetryIntervalSeconds)
 	require.Equal(t, 75, got.ManualRetryCooldownSeconds)
 	require.Equal(t, 240, got.TTLSeconds)
 	require.Equal(t, 60, got.RefreshBeforeSeconds)

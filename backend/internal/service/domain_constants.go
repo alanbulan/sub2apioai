@@ -715,9 +715,7 @@ const (
 	SettingKeyOpenAICodexTicketHarvestProxyURL = "openai_codex_ticket_harvest_proxy_url"
 	// SettingKeyOpenAICodexTicketProxyPool stores the ordered, weighted harvest proxy list as JSON.
 	SettingKeyOpenAICodexTicketProxyPool                  = "openai_codex_ticket_proxy_pool"
-	SettingKeyOpenAICodexTicketRetryCount                 = "openai_codex_ticket_retry_count"
 	SettingKeyOpenAICodexTicketRetryIntervalSeconds       = "openai_codex_ticket_retry_interval_seconds"
-	SettingKeyOpenAICodexTicketSteadyRetryIntervalSeconds = "openai_codex_ticket_steady_retry_interval_seconds"
 	SettingKeyOpenAICodexTicketManualRetryCooldownSeconds = "openai_codex_ticket_manual_retry_cooldown_seconds"
 	SettingKeyOpenAICodexTicketTTLSeconds                 = "openai_codex_ticket_ttl_seconds"
 	SettingKeyOpenAICodexTicketRefreshBeforeSeconds       = "openai_codex_ticket_refresh_before_seconds"

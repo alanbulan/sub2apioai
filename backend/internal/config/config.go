@@ -1223,7 +1223,7 @@ func (c *UserMessageQueueConfig) GetEffectiveMode() string {
 
 // OpenAICodexTicketConfig 控制 ChatGPT OAuth 的 x-codex-turn-state 门票。
 // 打票走 harvest_proxy_url（SOCKS），业务出站仍用账号住宅 proxy_id，只替换该请求头。
-// 门票默认有效 240 秒，并在到期前 60 秒开始续票。
+// 门票默认有效 70 秒，并在到期前 30 秒开始预存新票。
 type OpenAICodexTicketConfig struct {
 	Enabled                      bool     `mapstructure:"enabled"`
 	TargetLength                 int      `mapstructure:"target_length"`
@@ -2402,8 +2402,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_compact_model", "gpt-5.5")
 	viper.SetDefault("gateway.openai_codex_ticket.enabled", false)
 	viper.SetDefault("gateway.openai_codex_ticket.target_length", 292)
-	viper.SetDefault("gateway.openai_codex_ticket.ttl_seconds", 240)
-	viper.SetDefault("gateway.openai_codex_ticket.refresh_before_seconds", 60)
+	viper.SetDefault("gateway.openai_codex_ticket.ttl_seconds", 70)
+	viper.SetDefault("gateway.openai_codex_ticket.refresh_before_seconds", 30)
 	viper.SetDefault("gateway.openai_codex_ticket.harvest_proxy_url", "")
 	viper.SetDefault("gateway.openai_codex_ticket.harvest_proxy_rotate_url", "")
 	viper.SetDefault("gateway.openai_codex_ticket.harvest_probe_interval_seconds", 6)

@@ -221,9 +221,7 @@ type SystemSettings struct {
 	OpenAICodexTicketHarvestProxyURL            string                           `json:"openai_codex_ticket_harvest_proxy_url"`
 	OpenAICodexTicketHarvestProxyConfigured     bool                             `json:"openai_codex_ticket_harvest_proxy_configured"`
 	OpenAICodexTicketProxyPool                  []service.OpenAICodexTicketProxy `json:"openai_codex_ticket_proxy_pool"`
-	OpenAICodexTicketRetryCount                 int                              `json:"openai_codex_ticket_retry_count"`
 	OpenAICodexTicketRetryIntervalSeconds       int                              `json:"openai_codex_ticket_retry_interval_seconds"`
-	OpenAICodexTicketSteadyRetryIntervalSeconds int                              `json:"openai_codex_ticket_steady_retry_interval_seconds"`
 	OpenAICodexTicketManualRetryCooldownSeconds int                              `json:"openai_codex_ticket_manual_retry_cooldown_seconds"`
 	OpenAICodexTicketTTLSeconds                 int                              `json:"openai_codex_ticket_ttl_seconds"`
 	OpenAICodexTicketRefreshBeforeSeconds       int                              `json:"openai_codex_ticket_refresh_before_seconds"`

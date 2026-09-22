@@ -312,25 +312,25 @@ gateway:
   # 当 compact 端点暂未支持更新模型时，可通过这里降级规避失败。
   openai_compact_model: "gpt-5.5"
   # ChatGPT OAuth x-codex-turn-state ticket: harvest a 292-length header via a
-  # dedicated HTTP(S)/SOCKS proxy, retain its routing cookies, and inject both on
-  # production requests. The observed validity window is about 240 seconds. Off by default.
-  # ChatGPT OAuth 门票：用独立 HTTP(S)/SOCKS 代理获取 292 门票及路由 Cookie，默认按 240 秒窗口管理，
+  # dedicated HTTP(S)/SOCKS proxies, retain fresh routing cookies, and inject both on
+  # production requests. The observed validity window is managed as 70 seconds. Off by default.
+  # ChatGPT OAuth 门票：用独立 HTTP(S)/SOCKS 代理获取 292 门票及路由 Cookie，默认按 70 秒窗口管理，
   # 再在业务请求中同时注入；业务请求本身不经过打票代理。默认关闭。
   # Env: GATEWAY_OPENAI_CODEX_TICKET_ENABLED=true
   #      GATEWAY_OPENAI_CODEX_TICKET_HARVEST_PROXY_URL=http://user___SESSION__:pass@host:port
   # Admin UI 开关（系统设置 → 网关 → Codex 设置 → 292 打票）可覆盖 enabled，无需重启。
   # Off: do not harvest or inject. On: harvest in the background and inject on production requests.
-  # Put __SESSION__ in the provider's sticky-session slot to isolate and rotate
-  # egress sessions per account/model while preserving probe backoff limits.
+  # Up to four configured proxies race per account/model. Put __SESSION__ in a
+  # provider's sticky-session slot so every failed round uses a different exit.
   # Credential shadow accounts retain their existing forwarding policy and are not ticket-gated.
   openai_codex_ticket:
     enabled: false
     target_length: 292
-    ttl_seconds: 240
-    refresh_before_seconds: 60
+    ttl_seconds: 70
+    refresh_before_seconds: 30
     # 后台「系统设置 → 网关 → Codex 设置」可覆盖此值，无需重启。
-    # 后台值的读取缓存为 5 秒。在服务商的会话位置放 __SESSION__，系统会
-    # 为每个账号/模型使用独立粘性会话，并在受控退避内自动换出口。
+    # 后台值的读取缓存为 5 秒。每个账号/模型每轮最多并发 4 个代理。
+    # 在服务商的会话位置放 __SESSION__，失败后会更换会话出口。
     harvest_proxy_url: ""
     # 固定代理可选：服务商提供的换 IP 地址。仅在网络错误、HTTP 403 或
     # HTTP 200 但未返回 292 时调用；所有并发探测结束后每轮最多调用一次。
