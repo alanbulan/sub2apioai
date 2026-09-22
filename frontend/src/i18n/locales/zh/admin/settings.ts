@@ -560,6 +560,8 @@ export default {
         codexTicketRetryInterval: '快速重试间隔（秒）',
         codexTicketSteadyRetryInterval: '低频重试间隔（秒）',
         codexTicketManualCooldown: '手动重试冷却（秒）',
+        codexTicketTTL: '门票与路由 Cookie 有效期（秒）',
+        codexTicketRefreshBefore: '到期前提前刷新（秒）',
         codexClientRestrictionTitle: 'Codex 客户端限制',
         codexHardeningDesc:
           '仅对已开启「仅允许 Codex 官方客户端」的 OpenAI OAuth 账号生效（全局）。在 User-Agent/Originator 之外，用版本区间、引擎指纹门与黑/白名单巩固判定。',

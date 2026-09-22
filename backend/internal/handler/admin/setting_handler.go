@@ -311,6 +311,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		OpenAICodexTicketRetryIntervalSeconds:                  settings.OpenAICodexTicketRetryIntervalSeconds,
 		OpenAICodexTicketSteadyRetryIntervalSeconds:            settings.OpenAICodexTicketSteadyRetryIntervalSeconds,
 		OpenAICodexTicketManualRetryCooldownSeconds:            settings.OpenAICodexTicketManualRetryCooldownSeconds,
+		OpenAICodexTicketTTLSeconds:                            settings.OpenAICodexTicketTTLSeconds,
+		OpenAICodexTicketRefreshBeforeSeconds:                  settings.OpenAICodexTicketRefreshBeforeSeconds,
 		MinCodexVersion:                                        settings.MinCodexVersion,
 		MaxCodexVersion:                                        settings.MaxCodexVersion,
 		CodexCLIOnlyBlacklist:                                  settings.CodexCLIOnlyBlacklist,

@@ -509,7 +509,9 @@ type OpenAIGatewayService struct {
 	openaiCodexTurnStateOrigins sync.Map
 	openaiCodexTurnStateWrites  atomic.Uint64
 	// openaiCodexTickets: accountID\x00model → *openAICodexTicket，292 长度门票。
+	// openaiCodexRouteCookies: accountID → *openAICodexRouteCookie，账号级路由 Cookie。
 	openaiCodexTickets             sync.Map
+	openaiCodexRouteCookies        sync.Map
 	openaiCodexTicketProbeBackoffs sync.Map
 	openaiCodexTicketProxySessions sync.Map
 	openaiCodexTicketProbing       sync.Map

@@ -21,6 +21,8 @@ export function codexTicketPauseMessage(ticket: OpenAICodexTurnTicketStatus): Co
         : { key: 'admin.accounts.openai.codexTurnTicketPausedModelUnknown' }
     case 'model_unverified':
       return { key: 'admin.accounts.openai.codexTurnTicketPausedModelUnknown' }
+    case 'missing_cookie':
+      return { key: 'admin.accounts.openai.codexTurnTicketPausedCookie' }
     case 'upstream_overloaded':
       return { key: 'admin.accounts.openai.codexTurnTicketPausedOverloaded' }
     case 'http_error':

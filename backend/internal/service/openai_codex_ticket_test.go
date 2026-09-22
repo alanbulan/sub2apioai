@@ -22,6 +22,7 @@ func fakeCodexTicketState(n int) string {
 }
 
 func ticketTestAccount(id int64) *Account {
+	now := time.Now()
 	return &Account{
 		ID:          id,
 		Platform:    PlatformOpenAI,
@@ -29,7 +30,20 @@ func ticketTestAccount(id int64) *Account {
 		Credentials: map[string]any{"access_token": "tok", "chatgpt_account_id": "acc-1"},
 		Status:      StatusActive,
 		Schedulable: true,
+		Extra: map[string]any{
+			openAICodexRouteCookieExtraKey: &openAICodexRouteCookie{
+				AccountID:  id,
+				Values:     map[string]string{"__cflb": "route-test", "__oailb": "origin-test"},
+				CapturedAt: now,
+				ExpiresAt:  now.Add(time.Hour),
+			},
+		},
 	}
+}
+
+func addCodexTicketTestRouteCookies(h http.Header) {
+	h.Add("Set-Cookie", "__cflb=route-test; Path=/; HttpOnly; Secure")
+	h.Add("Set-Cookie", "__oailb=origin-test; Path=/; HttpOnly; Secure")
 }
 
 func ticketTestService(t *testing.T, cfg config.OpenAICodexTicketConfig, upstream HTTPUpstream) *OpenAIGatewayService {
@@ -67,6 +81,9 @@ func (u *codexTicketProxySequenceUpstream) Do(req *http.Request, proxyURL string
 	}
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(length))
+	if length == 292 && status == http.StatusOK {
+		addCodexTicketTestRouteCookies(h)
+	}
 	return &http.Response{StatusCode: status, Header: h, Body: io.NopCloser(strings.NewReader(codexTicketProbeSuccessSSE(codexTicketProbeModelFromRequest(req))))}, nil
 }
 
@@ -100,6 +117,9 @@ func (u *codexTicketRotatableProxyUpstream) Do(req *http.Request, proxyURL strin
 	if u.probeLength > 0 {
 		h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(u.probeLength))
 	}
+	if u.probeLength == 292 && status == http.StatusOK {
+		addCodexTicketTestRouteCookies(h)
+	}
 	return &http.Response{StatusCode: status, Header: h, Body: io.NopCloser(strings.NewReader(codexTicketProbeSuccessSSE(codexTicketProbeModelFromRequest(req))))}, nil
 }
 
@@ -119,7 +139,7 @@ func TestApplyOpenAICodexTicket_ReplacesHeader(t *testing.T) {
 		Length:     292,
 		CapturedAt: time.Now(),
 		ExpiresAt:  time.Now().Add(time.Hour),
-	})
+	}, nil)
 
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(312))
@@ -127,6 +147,8 @@ func TestApplyOpenAICodexTicket_ReplacesHeader(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, state, h.Get(openAICodexTurnStateHeader))
 	require.Equal(t, 292, len(h.Get(openAICodexTurnStateHeader)))
+	require.Contains(t, h.Get("Cookie"), "__cflb=route-test")
+	require.Contains(t, h.Get("Cookie"), "__oailb=origin-test")
 }
 
 func TestApplyOpenAICodexTicket_DoesNotReuseOtherModelOrAccount(t *testing.T) {
@@ -147,7 +169,7 @@ func TestApplyOpenAICodexTicket_DoesNotReuseOtherModelOrAccount(t *testing.T) {
 		Length:     292,
 		CapturedAt: time.Now(),
 		ExpiresAt:  time.Now().Add(time.Hour),
-	})
+	}, nil)
 
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, "keep-ungated")
@@ -176,7 +198,7 @@ func TestLookupOpenAICodexTicket_PrefersNewerExtra(t *testing.T) {
 		Length:     292,
 		CapturedAt: time.Now().Add(-30 * time.Minute),
 		ExpiresAt:  time.Now().Add(-time.Minute),
-	})
+	}, nil)
 	account.Extra = map[string]any{openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{
 		Model:      "gpt-6-astra",
 		State:      newState,
@@ -188,7 +210,7 @@ func TestLookupOpenAICodexTicket_PrefersNewerExtra(t *testing.T) {
 	got := svc.lookupOpenAICodexTicket(account, "gpt-6-astra")
 	require.NotNil(t, got)
 	require.Equal(t, newState, got.State)
-	require.True(t, got.valid(time.Now(), 292))
+	require.True(t, got.valid(time.Now(), 292, time.Hour))
 }
 
 func TestApplyOpenAICodexTicket_ExpiredNotInjected(t *testing.T) {
@@ -207,7 +229,7 @@ func TestApplyOpenAICodexTicket_ExpiredNotInjected(t *testing.T) {
 		Length:     292,
 		CapturedAt: time.Now().Add(-2 * time.Hour),
 		ExpiresAt:  time.Now().Add(-time.Minute),
-	})
+	}, nil)
 	h := http.Header{}
 	err := svc.applyOpenAICodexTicket(context.Background(), account, "gpt-6-astra", h)
 	require.ErrorIs(t, err, ErrOpenAICodexTicketUnavailable)
@@ -229,7 +251,7 @@ func TestApplyOpenAICodexTicket_WrongLengthNotInjected(t *testing.T) {
 		Length:     312,
 		CapturedAt: time.Now(),
 		ExpiresAt:  time.Now().Add(time.Hour),
-	})
+	}, nil)
 	h := http.Header{}
 	err := svc.applyOpenAICodexTicket(context.Background(), account, "gpt-6-astra", h)
 	require.ErrorIs(t, err, ErrOpenAICodexTicketUnavailable)
@@ -358,22 +380,28 @@ func TestLookupOpenAICodexTicket_HydratesFromExtra(t *testing.T) {
 	got := svc.lookupOpenAICodexTicket(account, "gpt-6-astra")
 	require.NotNil(t, got)
 	require.Equal(t, state, got.State)
-	require.True(t, got.valid(time.Now(), 292))
+	require.True(t, got.valid(time.Now(), 292, time.Hour))
 }
 
 func TestOpenAICodexTicketStatuses_ReportsRemainingTTL(t *testing.T) {
+	now := time.Now()
 	account := ticketTestAccount(41)
 	account.Extra = map[string]any{
 		openAICodexTicketExtraKey("gpt-6-astra"): map[string]any{
 			"state":       fakeCodexTicketState(292),
 			"length":      292,
 			"model":       "gpt-6-astra",
-			"captured_at": time.Now().Add(-10 * time.Minute),
-			"expires_at":  time.Now().Add(50 * time.Minute),
+			"captured_at": now.Add(-10 * time.Minute),
+			"expires_at":  now.Add(50 * time.Minute),
+		},
+		openAICodexRouteCookieExtraKey: &openAICodexRouteCookie{
+			AccountID:  41,
+			Values:     map[string]string{"__cflb": "route-test"},
+			CapturedAt: now.Add(-10 * time.Minute),
+			ExpiresAt:  now.Add(50 * time.Minute),
 		},
 	}
-	now := time.Now()
-	got := OpenAICodexTicketStatuses(account, config.OpenAICodexTicketConfig{Enabled: true, FailClosed: true}, now)
+	got := OpenAICodexTicketStatuses(account, config.OpenAICodexTicketConfig{Enabled: true, FailClosed: true, TTLSeconds: 3600}, now)
 	require.Len(t, got, 2)
 	require.Equal(t, "gpt-6-astra", got[0].Model)
 	require.True(t, got[0].Ready)
@@ -453,6 +481,7 @@ func (u *codexTicketConcurrentUpstream) Do(req *http.Request, _ string, _ int64,
 	}
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
+	addCodexTicketTestRouteCookies(h)
 	return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader(codexTicketProbeSuccessSSE(codexTicketProbeModelFromRequest(req))))}, nil
 }
 func TestRefreshOpenAICodexTickets_ConcurrentModelsPreserveAccountSnapshot(t *testing.T) {
@@ -466,11 +495,12 @@ func TestRefreshOpenAICodexTickets_ConcurrentModelsPreserveAccountSnapshot(t *te
 	svc.refreshOpenAICodexTickets(context.Background())
 	require.Equal(t, int64(2), upstream.started.Load())
 	require.Equal(t, map[string]any{"existing": true}, account.Extra)
-	require.Len(t, repo.updates, 2)
+	require.Len(t, repo.updates, 3)
+	require.Contains(t, repo.updates, openAICodexRouteCookieExtraKey)
 	for _, model := range []string{openAICodexTicketDefaultModel, openAICodexTicketDefaultSolModel} {
 		ticket := svc.lookupOpenAICodexTicket(account, model)
 		require.NotNil(t, ticket)
-		require.True(t, ticket.valid(time.Now(), 292))
+		require.True(t, ticket.valid(time.Now(), 292, time.Hour))
 	}
 	// Valid tickets do not produce another probe on the next cycle.
 	svc.refreshOpenAICodexTickets(context.Background())
@@ -503,8 +533,8 @@ func TestRefreshOpenAICodexTickets_RefreshesBeforeExpiry(t *testing.T) {
 		Length:     292,
 		CapturedAt: time.Now().Add(-51 * time.Minute),
 		ExpiresAt:  oldExpiry,
-	})
-	require.True(t, svc.lookupOpenAICodexTicket(account, "gpt-6-astra").valid(time.Now(), 292))
+	}, nil)
+	require.True(t, svc.lookupOpenAICodexTicket(account, "gpt-6-astra").valid(time.Now(), 292, time.Hour))
 
 	svc.refreshOpenAICodexTickets(context.Background())
 
@@ -991,10 +1021,10 @@ func TestProbeOpenAICodexTicket_RejectsInvalidState(t *testing.T) {
 }
 func TestOpenAICodexTicket_RequiresActualLengthAndExpiry(t *testing.T) {
 	ticket := &openAICodexTicket{State: fakeCodexTicketState(312), Length: 292, ExpiresAt: time.Now().Add(time.Hour)}
-	require.False(t, ticket.valid(time.Now(), 292))
+	require.False(t, ticket.valid(time.Now(), 292, time.Hour))
 	ticket.State = fakeCodexTicketState(292)
 	ticket.ExpiresAt = time.Time{}
-	require.False(t, ticket.valid(time.Now(), 292))
+	require.False(t, ticket.valid(time.Now(), 292, time.Hour))
 }
 
 // /responses/compact 的出站模型被 Forward 改写为 gateway.openai_compact_model

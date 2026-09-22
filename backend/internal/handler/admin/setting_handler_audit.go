@@ -504,6 +504,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.OpenAICodexTicketManualRetryCooldownSeconds != after.OpenAICodexTicketManualRetryCooldownSeconds {
 		changed = append(changed, "openai_codex_ticket_manual_retry_cooldown_seconds")
 	}
+	if before.OpenAICodexTicketTTLSeconds != after.OpenAICodexTicketTTLSeconds {
+		changed = append(changed, "openai_codex_ticket_ttl_seconds")
+	}
+	if before.OpenAICodexTicketRefreshBeforeSeconds != after.OpenAICodexTicketRefreshBeforeSeconds {
+		changed = append(changed, "openai_codex_ticket_refresh_before_seconds")
+	}
 	if before.OpenAICodexUserAgent != after.OpenAICodexUserAgent {
 		changed = append(changed, "openai_codex_user_agent")
 	}

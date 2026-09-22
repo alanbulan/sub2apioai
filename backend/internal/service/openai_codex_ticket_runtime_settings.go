@@ -17,11 +17,14 @@ const (
 	OpenAICodexTicketRetryIntervalSecondsDefault       = 60
 	OpenAICodexTicketSteadyRetryIntervalSecondsDefault = 1800
 	OpenAICodexTicketManualRetryCooldownSecondsDefault = 60
+	OpenAICodexTicketTTLSecondsDefault                 = 240
+	OpenAICodexTicketRefreshBeforeSecondsDefault       = 60
 
 	openAICodexTicketProxyPoolMaxSize        = 32
 	openAICodexTicketRetryCountMax           = 100
 	openAICodexTicketRetryIntervalMax        = 24 * 60 * 60
 	openAICodexTicketManualCooldownMax       = 24 * 60 * 60
+	openAICodexTicketTTLSecondsMax           = 24 * 60 * 60
 	openAICodexTicketRuntimeSettingsCacheTTL = 5 * time.Second
 	openAICodexTicketLegacyProxyID           = "legacy"
 	openAICodexTicketConfigProxyID           = "config"
@@ -48,6 +51,8 @@ type OpenAICodexTicketRuntimeSettings struct {
 	RetryIntervalSeconds       int
 	SteadyRetryIntervalSeconds int
 	ManualRetryCooldownSeconds int
+	TTLSeconds                 int
+	RefreshBeforeSeconds       int
 }
 
 func DefaultOpenAICodexTicketRuntimeSettings() OpenAICodexTicketRuntimeSettings {
@@ -56,6 +61,8 @@ func DefaultOpenAICodexTicketRuntimeSettings() OpenAICodexTicketRuntimeSettings 
 		RetryIntervalSeconds:       OpenAICodexTicketRetryIntervalSecondsDefault,
 		SteadyRetryIntervalSeconds: OpenAICodexTicketSteadyRetryIntervalSecondsDefault,
 		ManualRetryCooldownSeconds: OpenAICodexTicketManualRetryCooldownSecondsDefault,
+		TTLSeconds:                 OpenAICodexTicketTTLSecondsDefault,
+		RefreshBeforeSeconds:       OpenAICodexTicketRefreshBeforeSecondsDefault,
 	}
 }
 
@@ -69,6 +76,15 @@ func (s OpenAICodexTicketRuntimeSettings) SteadyRetryInterval() time.Duration {
 
 func (s OpenAICodexTicketRuntimeSettings) ManualRetryCooldown() time.Duration {
 	return time.Duration(normalizeOpenAICodexTicketManualCooldown(s.ManualRetryCooldownSeconds)) * time.Second
+}
+
+func (s OpenAICodexTicketRuntimeSettings) TTL() time.Duration {
+	return time.Duration(normalizeOpenAICodexTicketTTL(s.TTLSeconds)) * time.Second
+}
+
+func (s OpenAICodexTicketRuntimeSettings) RefreshBefore() time.Duration {
+	ttl := normalizeOpenAICodexTicketTTL(s.TTLSeconds)
+	return time.Duration(normalizeOpenAICodexTicketRefreshBefore(s.RefreshBeforeSeconds, ttl)) * time.Second
 }
 
 func (s OpenAICodexTicketRuntimeSettings) EnabledProxyCount() int {
@@ -116,6 +132,27 @@ func normalizeOpenAICodexTicketManualCooldown(value int) int {
 	return value
 }
 
+func normalizeOpenAICodexTicketTTL(value int) int {
+	if value < 30 || value > openAICodexTicketTTLSecondsMax {
+		return OpenAICodexTicketTTLSecondsDefault
+	}
+	return value
+}
+
+func normalizeOpenAICodexTicketRefreshBefore(value, ttl int) int {
+	if value < 5 || value >= ttl {
+		fallback := OpenAICodexTicketRefreshBeforeSecondsDefault
+		if fallback >= ttl {
+			fallback = ttl / 4
+		}
+		if fallback < 5 {
+			fallback = 5
+		}
+		return fallback
+	}
+	return value
+}
+
 func parseOpenAICodexTicketSettingInt(values map[string]string, key string, fallback int) int {
 	raw := strings.TrimSpace(values[key])
 	if raw == "" {
@@ -128,13 +165,19 @@ func parseOpenAICodexTicketSettingInt(values map[string]string, key string, fall
 	return parsed
 }
 
-func parseOpenAICodexTicketRuntimePolicy(values map[string]string) OpenAICodexTicketRuntimeSettings {
-	settings := DefaultOpenAICodexTicketRuntimeSettings()
+func parseOpenAICodexTicketRuntimePolicyWithFallback(values map[string]string, fallback OpenAICodexTicketRuntimeSettings) OpenAICodexTicketRuntimeSettings {
+	settings := fallback
 	settings.RetryCount = normalizeOpenAICodexTicketRetryCount(parseOpenAICodexTicketSettingInt(values, SettingKeyOpenAICodexTicketRetryCount, settings.RetryCount))
 	settings.RetryIntervalSeconds = normalizeOpenAICodexTicketRetryInterval(parseOpenAICodexTicketSettingInt(values, SettingKeyOpenAICodexTicketRetryIntervalSeconds, settings.RetryIntervalSeconds))
 	settings.SteadyRetryIntervalSeconds = normalizeOpenAICodexTicketSteadyRetryInterval(parseOpenAICodexTicketSettingInt(values, SettingKeyOpenAICodexTicketSteadyRetryIntervalSeconds, settings.SteadyRetryIntervalSeconds))
 	settings.ManualRetryCooldownSeconds = normalizeOpenAICodexTicketManualCooldown(parseOpenAICodexTicketSettingInt(values, SettingKeyOpenAICodexTicketManualRetryCooldownSeconds, settings.ManualRetryCooldownSeconds))
+	settings.TTLSeconds = normalizeOpenAICodexTicketTTL(parseOpenAICodexTicketSettingInt(values, SettingKeyOpenAICodexTicketTTLSeconds, settings.TTLSeconds))
+	settings.RefreshBeforeSeconds = normalizeOpenAICodexTicketRefreshBefore(parseOpenAICodexTicketSettingInt(values, SettingKeyOpenAICodexTicketRefreshBeforeSeconds, settings.RefreshBeforeSeconds), settings.TTLSeconds)
 	return settings
+}
+
+func parseOpenAICodexTicketRuntimePolicy(values map[string]string) OpenAICodexTicketRuntimeSettings {
+	return parseOpenAICodexTicketRuntimePolicyWithFallback(values, DefaultOpenAICodexTicketRuntimeSettings())
 }
 
 func normalizeOpenAICodexTicketProxyPool(pool []OpenAICodexTicketProxy) ([]OpenAICodexTicketProxy, error) {
@@ -282,6 +325,12 @@ func validateOpenAICodexTicketRuntimePolicy(settings OpenAICodexTicketRuntimeSet
 	if settings.ManualRetryCooldownSeconds < 5 || settings.ManualRetryCooldownSeconds > openAICodexTicketManualCooldownMax {
 		return fmt.Errorf("%s must be between 5 and %d", SettingKeyOpenAICodexTicketManualRetryCooldownSeconds, openAICodexTicketManualCooldownMax)
 	}
+	if settings.TTLSeconds < 30 || settings.TTLSeconds > openAICodexTicketTTLSecondsMax {
+		return fmt.Errorf("%s must be between 30 and %d", SettingKeyOpenAICodexTicketTTLSeconds, openAICodexTicketTTLSecondsMax)
+	}
+	if settings.RefreshBeforeSeconds < 5 || settings.RefreshBeforeSeconds >= settings.TTLSeconds {
+		return fmt.Errorf("%s must be between 5 and one second less than %s", SettingKeyOpenAICodexTicketRefreshBeforeSeconds, SettingKeyOpenAICodexTicketTTLSeconds)
+	}
 	return nil
 }
 
@@ -294,9 +343,13 @@ type cachedOpenAICodexTicketRuntimeSettings struct {
 	expiresAt int64
 }
 
-func (s *SettingService) GetOpenAICodexTicketRuntimeSettings(ctx context.Context, fallbackURL string) OpenAICodexTicketRuntimeSettings {
-	fallback := DefaultOpenAICodexTicketRuntimeSettings()
-	fallback.ProxyPool = resolveOpenAICodexTicketProxyPool(map[string]string{}, fallbackURL)
+func (s *SettingService) GetOpenAICodexTicketRuntimeSettings(ctx context.Context, fallback OpenAICodexTicketRuntimeSettings) OpenAICodexTicketRuntimeSettings {
+	fallback.RetryCount = normalizeOpenAICodexTicketRetryCount(fallback.RetryCount)
+	fallback.RetryIntervalSeconds = normalizeOpenAICodexTicketRetryInterval(fallback.RetryIntervalSeconds)
+	fallback.SteadyRetryIntervalSeconds = normalizeOpenAICodexTicketSteadyRetryInterval(fallback.SteadyRetryIntervalSeconds)
+	fallback.ManualRetryCooldownSeconds = normalizeOpenAICodexTicketManualCooldown(fallback.ManualRetryCooldownSeconds)
+	fallback.TTLSeconds = normalizeOpenAICodexTicketTTL(fallback.TTLSeconds)
+	fallback.RefreshBeforeSeconds = normalizeOpenAICodexTicketRefreshBefore(fallback.RefreshBeforeSeconds, fallback.TTLSeconds)
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -320,6 +373,8 @@ func (s *SettingService) GetOpenAICodexTicketRuntimeSettings(ctx context.Context
 			SettingKeyOpenAICodexTicketRetryIntervalSeconds,
 			SettingKeyOpenAICodexTicketSteadyRetryIntervalSeconds,
 			SettingKeyOpenAICodexTicketManualRetryCooldownSeconds,
+			SettingKeyOpenAICodexTicketTTLSeconds,
+			SettingKeyOpenAICodexTicketRefreshBeforeSeconds,
 		}
 		values, err := s.settingRepo.GetMultiple(dbCtx, keys)
 		if err != nil {
@@ -328,7 +383,11 @@ func (s *SettingService) GetOpenAICodexTicketRuntimeSettings(ctx context.Context
 			}
 			return fallback, nil
 		}
-		settings := parseOpenAICodexTicketRuntimePolicy(values)
+		settings := parseOpenAICodexTicketRuntimePolicyWithFallback(values, fallback)
+		fallbackURL := ""
+		if len(fallback.ProxyPool) == 1 {
+			fallbackURL = fallback.ProxyPool[0].URL
+		}
 		settings.ProxyPool = resolveOpenAICodexTicketProxyPool(values, fallbackURL)
 		s.openAICodexTicketRuntimeCache.Store(&cachedOpenAICodexTicketRuntimeSettings{
 			settings:  settings,

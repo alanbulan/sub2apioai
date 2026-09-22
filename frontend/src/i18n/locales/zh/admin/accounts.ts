@@ -753,6 +753,7 @@ export default {
         codexTurnTicketPausedLength: '返回 {length} 字节，该模型已暂停',
         codexTurnTicketPausedModel: '实际模型为 {model}，已暂停',
         codexTurnTicketPausedModelUnknown: '未确认实际模型，已暂停',
+        codexTurnTicketPausedCookie: '路由 Cookie 无效，该模型已暂停',
         codexTurnTicketPausedOverloaded: '上游过载，该模型已暂停',
         codexTurnTicketPausedHttp: '探测返回 HTTP {status}，已暂停',
         codexTurnTicketPausedTransport: '代理连接失败，该模型已暂停',

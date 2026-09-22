@@ -252,6 +252,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAICodexTicketRetryIntervalSeconds:              strconv.Itoa(OpenAICodexTicketRetryIntervalSecondsDefault),
 		SettingKeyOpenAICodexTicketSteadyRetryIntervalSeconds:        strconv.Itoa(OpenAICodexTicketSteadyRetryIntervalSecondsDefault),
 		SettingKeyOpenAICodexTicketManualRetryCooldownSeconds:        strconv.Itoa(OpenAICodexTicketManualRetryCooldownSecondsDefault),
+		SettingKeyOpenAICodexTicketTTLSeconds:                        strconv.Itoa(OpenAICodexTicketTTLSecondsDefault),
+		SettingKeyOpenAICodexTicketRefreshBeforeSeconds:              strconv.Itoa(OpenAICodexTicketRefreshBeforeSecondsDefault),
 		SettingPaymentVisibleMethodAlipaySource:                      "",
 		SettingPaymentVisibleMethodWxpaySource:                       "",
 		SettingPaymentVisibleMethodAlipayEnabled:                     "false",
@@ -910,6 +912,8 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.OpenAICodexTicketRetryIntervalSeconds = ticketRuntime.RetryIntervalSeconds
 	result.OpenAICodexTicketSteadyRetryIntervalSeconds = ticketRuntime.SteadyRetryIntervalSeconds
 	result.OpenAICodexTicketManualRetryCooldownSeconds = ticketRuntime.ManualRetryCooldownSeconds
+	result.OpenAICodexTicketTTLSeconds = ticketRuntime.TTLSeconds
+	result.OpenAICodexTicketRefreshBeforeSeconds = ticketRuntime.RefreshBeforeSeconds
 	// codex_cli_only 加固
 	result.MinCodexVersion = settings[SettingKeyMinCodexVersion]
 	result.MaxCodexVersion = settings[SettingKeyMaxCodexVersion]

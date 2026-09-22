@@ -4647,6 +4647,14 @@
                     {{ t("admin.settings.gatewayForwarding.codexTicketManualCooldown") }}
                     <input v-model.number="form.openai_codex_ticket_manual_retry_cooldown_seconds" type="number" min="5" max="86400" class="input mt-2 w-full" />
                   </label>
+                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.gatewayForwarding.codexTicketTTL") }}
+                    <input v-model.number="form.openai_codex_ticket_ttl_seconds" type="number" min="30" max="86400" class="input mt-2 w-full" />
+                  </label>
+                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.gatewayForwarding.codexTicketRefreshBefore") }}
+                    <input v-model.number="form.openai_codex_ticket_refresh_before_seconds" type="number" min="5" :max="Math.max(5, Number(form.openai_codex_ticket_ttl_seconds) - 1)" class="input mt-2 w-full" />
+                  </label>
                 </div>
                 <div>
                   <h3 class="text-base font-semibold text-gray-900 dark:text-white">
@@ -9996,6 +10004,8 @@ const form = reactive<SettingsForm>({
   openai_codex_ticket_retry_interval_seconds: 60,
   openai_codex_ticket_steady_retry_interval_seconds: 1800,
   openai_codex_ticket_manual_retry_cooldown_seconds: 60,
+  openai_codex_ticket_ttl_seconds: 240,
+  openai_codex_ticket_refresh_before_seconds: 60,
   // codex_cli_only 加固
   min_codex_version: "",
   max_codex_version: "",
@@ -11659,6 +11669,12 @@ async function saveSettings() {
       ),
       openai_codex_ticket_manual_retry_cooldown_seconds: Number(
         form.openai_codex_ticket_manual_retry_cooldown_seconds,
+      ),
+      openai_codex_ticket_ttl_seconds: Number(
+        form.openai_codex_ticket_ttl_seconds,
+      ),
+      openai_codex_ticket_refresh_before_seconds: Number(
+        form.openai_codex_ticket_refresh_before_seconds,
       ),
       min_codex_version: form.min_codex_version?.trim() || "",
       max_codex_version: form.max_codex_version?.trim() || "",

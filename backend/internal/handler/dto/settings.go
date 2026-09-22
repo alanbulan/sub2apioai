@@ -225,6 +225,8 @@ type SystemSettings struct {
 	OpenAICodexTicketRetryIntervalSeconds       int                              `json:"openai_codex_ticket_retry_interval_seconds"`
 	OpenAICodexTicketSteadyRetryIntervalSeconds int                              `json:"openai_codex_ticket_steady_retry_interval_seconds"`
 	OpenAICodexTicketManualRetryCooldownSeconds int                              `json:"openai_codex_ticket_manual_retry_cooldown_seconds"`
+	OpenAICodexTicketTTLSeconds                 int                              `json:"openai_codex_ticket_ttl_seconds"`
+	OpenAICodexTicketRefreshBeforeSeconds       int                              `json:"openai_codex_ticket_refresh_before_seconds"`
 
 	// codex_cli_only 加固
 	MinCodexVersion                      string `json:"min_codex_version"`

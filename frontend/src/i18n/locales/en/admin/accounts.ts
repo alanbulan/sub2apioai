@@ -675,6 +675,7 @@ export default {
         codexTurnTicketPausedLength: 'Got {length} bytes; model paused',
         codexTurnTicketPausedModel: 'Served by {model}; model paused',
         codexTurnTicketPausedModelUnknown: 'Served model unverified; model paused',
+        codexTurnTicketPausedCookie: 'Route cookie unavailable; model paused',
         codexTurnTicketPausedOverloaded: 'Upstream overloaded; model paused',
         codexTurnTicketPausedHttp: 'Probe returned HTTP {status}; model paused',
         codexTurnTicketPausedTransport: 'Proxy connection failed; model paused',

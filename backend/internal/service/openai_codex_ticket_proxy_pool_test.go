@@ -142,12 +142,17 @@ func TestOpenAICodexTicketRuntimeSettingsLoadPolicyAndPool(t *testing.T) {
 		SettingKeyOpenAICodexTicketRetryIntervalSeconds:       "45",
 		SettingKeyOpenAICodexTicketSteadyRetryIntervalSeconds: "900",
 		SettingKeyOpenAICodexTicketManualRetryCooldownSeconds: "75",
+		SettingKeyOpenAICodexTicketTTLSeconds:                 "240",
+		SettingKeyOpenAICodexTicketRefreshBeforeSeconds:       "60",
 	}}}
 	settings := NewSettingService(repo, &config.Config{})
-	got := settings.GetOpenAICodexTicketRuntimeSettings(context.Background(), "")
+	fallback := DefaultOpenAICodexTicketRuntimeSettings()
+	got := settings.GetOpenAICodexTicketRuntimeSettings(context.Background(), fallback)
 	require.Equal(t, 12, got.RetryCount)
 	require.Equal(t, 45, got.RetryIntervalSeconds)
 	require.Equal(t, 900, got.SteadyRetryIntervalSeconds)
 	require.Equal(t, 75, got.ManualRetryCooldownSeconds)
+	require.Equal(t, 240, got.TTLSeconds)
+	require.Equal(t, 60, got.RefreshBeforeSeconds)
 	require.Equal(t, pool, got.ProxyPool)
 }

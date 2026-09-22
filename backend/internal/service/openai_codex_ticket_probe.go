@@ -23,6 +23,7 @@ const (
 	openAICodexTicketProbeMissingState    openAICodexTicketProbeVerdict = "missing_state"
 	openAICodexTicketProbeModelMismatch   openAICodexTicketProbeVerdict = "model_mismatch"
 	openAICodexTicketProbeModelUnverified openAICodexTicketProbeVerdict = "model_unverified"
+	openAICodexTicketProbeMissingCookie   openAICodexTicketProbeVerdict = "missing_cookie"
 	openAICodexTicketProbeUpstreamFailed  openAICodexTicketProbeVerdict = "upstream_failed"
 	openAICodexTicketProbeOverloaded      openAICodexTicketProbeVerdict = "upstream_overloaded"
 	openAICodexTicketProbeIncomplete      openAICodexTicketProbeVerdict = "stream_incomplete"
@@ -32,10 +33,12 @@ const (
 )
 
 type openAICodexTicketProbeResult struct {
-	State       string
-	Status      int
-	Verdict     openAICodexTicketProbeVerdict
-	ServedModel string
+	State         string
+	Status        int
+	Verdict       openAICodexTicketProbeVerdict
+	ServedModel   string
+	RouteCookies  map[string]string
+	CookieUpdated bool
 }
 
 func (r openAICodexTicketProbeResult) verified() bool {
@@ -52,6 +55,8 @@ func inspectOpenAICodexTicketProbeResponse(resp *http.Response, requestedModel s
 	}
 	result.Status = resp.StatusCode
 	result.State = extractOpenAICodexTurnState(resp.Header)
+	result.RouteCookies = extractOpenAICodexRouteCookieValues(resp)
+	result.CookieUpdated = len(result.RouteCookies) > 0
 
 	switch {
 	case resp.StatusCode != http.StatusOK:
@@ -71,6 +76,9 @@ func inspectOpenAICodexTicketProbeResponse(resp *http.Response, requestedModel s
 	}
 
 	verdict, servedModel, err := inspectOpenAICodexTicketProbeStream(resp.Body, requestedModel)
+	if verdict == openAICodexTicketProbeVerified && !hasOpenAICodexRoutingCookie(result.RouteCookies) {
+		verdict = openAICodexTicketProbeMissingCookie
+	}
 	result.Verdict = verdict
 	result.ServedModel = safeOpenAICodexTicketObservedModel(servedModel)
 	return result, err

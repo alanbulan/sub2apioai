@@ -567,6 +567,8 @@ export default {
         codexTicketRetryInterval: "Fast retry interval (seconds)",
         codexTicketSteadyRetryInterval: "Steady retry interval (seconds)",
         codexTicketManualCooldown: "Manual retry cooldown (seconds)",
+        codexTicketTTL: "Ticket and route-cookie lifetime (seconds)",
+        codexTicketRefreshBefore: "Refresh before expiry (seconds)",
         codexClientRestrictionTitle: "Codex client restriction",
         codexHardeningDesc:
           "Only affects OpenAI OAuth accounts with 'Codex official clients only' enabled (global). Beyond User-Agent/Originator, harden the decision with a version range, an engine-fingerprint gate, and black/whitelists.",

@@ -34,6 +34,7 @@ func codexTicketProbeSuccessSSE(model string) string {
 func codexTicketResponse() *http.Response {
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
+	addCodexTicketTestRouteCookies(h)
 	return &http.Response{StatusCode: http.StatusOK, Header: h, Body: io.NopCloser(strings.NewReader(codexTicketProbeSuccessSSE("gpt-6-astra")))}
 }
 
@@ -75,6 +76,65 @@ func TestCodexTicketProbeBypassesPluginDuringWiring(t *testing.T) {
 	}
 	wg.Wait()
 	require.Equal(t, int64(20), calls.Load())
+}
+
+func TestCodexTicketProbeDoesNotReuseCookieNearExpiry(t *testing.T) {
+	tests := []struct {
+		name        string
+		capturedAt  time.Time
+		wantCookie  bool
+		wantVerdict openAICodexTicketProbeVerdict
+	}{
+		{
+			name:        "fresh cookie",
+			capturedAt:  time.Now(),
+			wantCookie:  true,
+			wantVerdict: openAICodexTicketProbeVerified,
+		},
+		{
+			name:        "refresh window",
+			capturedAt:  time.Now().Add(-181 * time.Second),
+			wantCookie:  false,
+			wantVerdict: openAICodexTicketProbeMissingCookie,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			account := ticketTestAccount(41)
+			account.Extra[openAICodexRouteCookieExtraKey] = &openAICodexRouteCookie{
+				AccountID:  account.ID,
+				Values:     map[string]string{"__cflb": "route-test"},
+				CapturedAt: testCase.capturedAt,
+				ExpiresAt:  testCase.capturedAt.Add(240 * time.Second),
+			}
+			upstream := &codexTicketFuncUpstream{do: func(req *http.Request) (*http.Response, error) {
+				receivedCookie := false
+				for _, cookie := range req.Cookies() {
+					receivedCookie = receivedCookie || cookie.Name == "__cflb"
+				}
+				require.Equal(t, testCase.wantCookie, receivedCookie)
+				header := http.Header{}
+				header.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     header,
+					Body:       io.NopCloser(strings.NewReader(codexTicketProbeSuccessSSE("gpt-6-astra"))),
+				}, nil
+			}}
+			svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+				Enabled:              true,
+				TTLSeconds:           240,
+				RefreshBeforeSeconds: 60,
+			}, upstream)
+
+			result, err := svc.fireOpenAICodexTicketProbe(
+				context.Background(), account, "test-token", "gpt-6-astra", "", time.Second,
+			)
+			require.NoError(t, err)
+			require.Equal(t, testCase.wantVerdict, result.Verdict)
+		})
+	}
 }
 
 type codexTicketLifecycleRepo struct {
@@ -262,6 +322,7 @@ func TestCodexTicketProbeRequiresVerifiedTargetModelOutput(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			header := http.Header{}
 			header.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
+			addCodexTicketTestRouteCookies(header)
 			result, err := inspectOpenAICodexTicketProbeResponse(&http.Response{
 				StatusCode: http.StatusOK,
 				Header:     header,

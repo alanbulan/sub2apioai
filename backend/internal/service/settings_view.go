@@ -257,6 +257,8 @@ type SystemSettings struct {
 	OpenAICodexTicketRetryIntervalSeconds       int
 	OpenAICodexTicketSteadyRetryIntervalSeconds int
 	OpenAICodexTicketManualRetryCooldownSeconds int
+	OpenAICodexTicketTTLSeconds                 int
+	OpenAICodexTicketRefreshBeforeSeconds       int
 	MinCodexVersion                             string // codex_cli_only 最低 Codex 引擎版本；空=不检查
 	MaxCodexVersion                             string // codex_cli_only 最高 Codex 引擎版本；空=不检查
 	CodexCLIOnlyBlacklist                       string // codex_cli_only 全局黑名单 JSON（[]AllowedClientEntry，OR deny）

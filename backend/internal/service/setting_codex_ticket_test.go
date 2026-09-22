@@ -50,7 +50,7 @@ func TestCodexTicketEnabledRuntimeSettingOverridesYaml(t *testing.T) {
 		Length:     292,
 		CapturedAt: time.Now(),
 		ExpiresAt:  time.Now().Add(time.Hour),
-	})
+	}, nil)
 
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, "client-state")

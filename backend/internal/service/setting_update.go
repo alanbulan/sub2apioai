@@ -500,6 +500,8 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		RetryIntervalSeconds:       settings.OpenAICodexTicketRetryIntervalSeconds,
 		SteadyRetryIntervalSeconds: settings.OpenAICodexTicketSteadyRetryIntervalSeconds,
 		ManualRetryCooldownSeconds: settings.OpenAICodexTicketManualRetryCooldownSeconds,
+		TTLSeconds:                 settings.OpenAICodexTicketTTLSeconds,
+		RefreshBeforeSeconds:       settings.OpenAICodexTicketRefreshBeforeSeconds,
 	}
 	// Preserve compatibility for internal full-document callers compiled before
 	// these fields existed. HTTP requests are merged and validated by the handler,
@@ -521,6 +523,14 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		ticketRuntime.ManualRetryCooldownSeconds = defaults.ManualRetryCooldownSeconds
 		settings.OpenAICodexTicketManualRetryCooldownSeconds = defaults.ManualRetryCooldownSeconds
 	}
+	if ticketRuntime.TTLSeconds == 0 {
+		ticketRuntime.TTLSeconds = defaults.TTLSeconds
+		settings.OpenAICodexTicketTTLSeconds = defaults.TTLSeconds
+	}
+	if ticketRuntime.RefreshBeforeSeconds == 0 {
+		ticketRuntime.RefreshBeforeSeconds = defaults.RefreshBeforeSeconds
+		settings.OpenAICodexTicketRefreshBeforeSeconds = defaults.RefreshBeforeSeconds
+	}
 	if err := validateOpenAICodexTicketRuntimePolicy(ticketRuntime); err != nil {
 		return nil, infraerrors.BadRequest("INVALID_CODEX_TICKET_RETRY_POLICY", err.Error())
 	}
@@ -528,6 +538,8 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyOpenAICodexTicketRetryIntervalSeconds] = strconv.Itoa(ticketRuntime.RetryIntervalSeconds)
 	updates[SettingKeyOpenAICodexTicketSteadyRetryIntervalSeconds] = strconv.Itoa(ticketRuntime.SteadyRetryIntervalSeconds)
 	updates[SettingKeyOpenAICodexTicketManualRetryCooldownSeconds] = strconv.Itoa(ticketRuntime.ManualRetryCooldownSeconds)
+	updates[SettingKeyOpenAICodexTicketTTLSeconds] = strconv.Itoa(ticketRuntime.TTLSeconds)
+	updates[SettingKeyOpenAICodexTicketRefreshBeforeSeconds] = strconv.Itoa(ticketRuntime.RefreshBeforeSeconds)
 	// SettingKeyOpenAICodexClientVersionSynced 由自动同步任务独占写入，此处不得覆盖，
 	// 否则面板保存会把同步结果清空。
 	// codex_cli_only 加固

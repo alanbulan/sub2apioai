@@ -264,6 +264,8 @@ type UpdateSettingsRequest struct {
 	OpenAICodexTicketRetryIntervalSeconds       *int                              `json:"openai_codex_ticket_retry_interval_seconds"`
 	OpenAICodexTicketSteadyRetryIntervalSeconds *int                              `json:"openai_codex_ticket_steady_retry_interval_seconds"`
 	OpenAICodexTicketManualRetryCooldownSeconds *int                              `json:"openai_codex_ticket_manual_retry_cooldown_seconds"`
+	OpenAICodexTicketTTLSeconds                 *int                              `json:"openai_codex_ticket_ttl_seconds"`
+	OpenAICodexTicketRefreshBeforeSeconds       *int                              `json:"openai_codex_ticket_refresh_before_seconds"`
 
 	// codex_cli_only 加固（global-only）
 	MinCodexVersion                      string `json:"min_codex_version"`
@@ -1538,6 +1540,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		RetryIntervalSeconds:       previousSettings.OpenAICodexTicketRetryIntervalSeconds,
 		SteadyRetryIntervalSeconds: previousSettings.OpenAICodexTicketSteadyRetryIntervalSeconds,
 		ManualRetryCooldownSeconds: previousSettings.OpenAICodexTicketManualRetryCooldownSeconds,
+		TTLSeconds:                 previousSettings.OpenAICodexTicketTTLSeconds,
+		RefreshBeforeSeconds:       previousSettings.OpenAICodexTicketRefreshBeforeSeconds,
 	}
 	if req.OpenAICodexTicketRetryCount != nil {
 		codexRetryPolicy.RetryCount = *req.OpenAICodexTicketRetryCount
@@ -1550,6 +1554,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 	if req.OpenAICodexTicketManualRetryCooldownSeconds != nil {
 		codexRetryPolicy.ManualRetryCooldownSeconds = *req.OpenAICodexTicketManualRetryCooldownSeconds
+	}
+	if req.OpenAICodexTicketTTLSeconds != nil {
+		codexRetryPolicy.TTLSeconds = *req.OpenAICodexTicketTTLSeconds
+	}
+	if req.OpenAICodexTicketRefreshBeforeSeconds != nil {
+		codexRetryPolicy.RefreshBeforeSeconds = *req.OpenAICodexTicketRefreshBeforeSeconds
 	}
 	if err := service.ValidateOpenAICodexTicketRuntimePolicy(codexRetryPolicy); err != nil {
 		response.Error(c, http.StatusBadRequest, err.Error())
@@ -1838,6 +1848,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAICodexTicketRetryIntervalSeconds:       codexRetryPolicy.RetryIntervalSeconds,
 		OpenAICodexTicketSteadyRetryIntervalSeconds: codexRetryPolicy.SteadyRetryIntervalSeconds,
 		OpenAICodexTicketManualRetryCooldownSeconds: codexRetryPolicy.ManualRetryCooldownSeconds,
+		OpenAICodexTicketTTLSeconds:                 codexRetryPolicy.TTLSeconds,
+		OpenAICodexTicketRefreshBeforeSeconds:       codexRetryPolicy.RefreshBeforeSeconds,
 		MinCodexVersion:                             strings.TrimSpace(req.MinCodexVersion),
 		MaxCodexVersion:                             strings.TrimSpace(req.MaxCodexVersion),
 		CodexCLIOnlyBlacklist:                       strings.TrimSpace(req.CodexCLIOnlyBlacklist),
@@ -2388,6 +2400,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAICodexTicketRetryIntervalSeconds:                  updatedSettings.OpenAICodexTicketRetryIntervalSeconds,
 		OpenAICodexTicketSteadyRetryIntervalSeconds:            updatedSettings.OpenAICodexTicketSteadyRetryIntervalSeconds,
 		OpenAICodexTicketManualRetryCooldownSeconds:            updatedSettings.OpenAICodexTicketManualRetryCooldownSeconds,
+		OpenAICodexTicketTTLSeconds:                            updatedSettings.OpenAICodexTicketTTLSeconds,
+		OpenAICodexTicketRefreshBeforeSeconds:                  updatedSettings.OpenAICodexTicketRefreshBeforeSeconds,
 		MinCodexVersion:                                        updatedSettings.MinCodexVersion,
 		MaxCodexVersion:                                        updatedSettings.MaxCodexVersion,
 		CodexCLIOnlyBlacklist:                                  updatedSettings.CodexCLIOnlyBlacklist,

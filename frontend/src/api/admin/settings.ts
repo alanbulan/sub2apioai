@@ -656,6 +656,8 @@ export interface SystemSettings {
   openai_codex_ticket_retry_interval_seconds: number;
   openai_codex_ticket_steady_retry_interval_seconds: number;
   openai_codex_ticket_manual_retry_cooldown_seconds: number;
+  openai_codex_ticket_ttl_seconds: number;
+  openai_codex_ticket_refresh_before_seconds: number;
   // codex_cli_only 加固
   min_codex_version: string;
   max_codex_version: string;
@@ -982,6 +984,8 @@ export interface UpdateSettingsRequest {
   openai_codex_ticket_retry_interval_seconds?: number;
   openai_codex_ticket_steady_retry_interval_seconds?: number;
   openai_codex_ticket_manual_retry_cooldown_seconds?: number;
+  openai_codex_ticket_ttl_seconds?: number;
+  openai_codex_ticket_refresh_before_seconds?: number;
   // codex_cli_only 加固
   min_codex_version?: string;
   max_codex_version?: string;
