@@ -30,6 +30,23 @@ func TestLoadDefaultModelsListReadMaxBytes(t *testing.T) {
 	require.Equal(t, DefaultModelsListReadMaxBytes, cfg.Gateway.ModelsListReadMaxBytes)
 }
 
+func TestLoadOpenAICodexBaseURL(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_OPENAI_CODEX_BASE_URL", "https://relay.example.com/backend-api/codex/")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "https://relay.example.com/backend-api/codex", cfg.Gateway.OpenAICodexBaseURL)
+}
+
+func TestLoadRejectsInsecureOpenAICodexBaseURL(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_OPENAI_CODEX_BASE_URL", "http://relay.example.com/backend-api/codex")
+
+	_, err := Load()
+	require.ErrorContains(t, err, "gateway.openai_codex_base_url")
+}
+
 func TestLoadTimezonePrecedence(t *testing.T) {
 	tests := []struct {
 		name         string

@@ -902,6 +902,11 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	} else if s != nil && s.cfg != nil {
 		result.OpenAICodexTicketEnabled = s.cfg.Gateway.OpenAICodexTicket.Enabled
 	}
+	result.OpenAICodexTextRelayEnabled = settings[SettingKeyOpenAICodexTextRelayEnabled] == "true"
+	result.OpenAICodexTextRelayBaseURL = strings.TrimSpace(settings[SettingKeyOpenAICodexTextRelayBaseURL])
+	if result.OpenAICodexTextRelayBaseURL == "" && s != nil && s.cfg != nil {
+		result.OpenAICodexTextRelayBaseURL = strings.TrimSpace(s.cfg.Gateway.OpenAICodexBaseURL)
+	}
 	result.OpenAICodexTicketHarvestProxyURL = strings.TrimSpace(settings[SettingKeyOpenAICodexTicketHarvestProxyURL])
 	ticketRuntime := parseOpenAICodexTicketRuntimePolicy(settings)
 	ticketRuntime.ProxyPool = resolveOpenAICodexTicketProxyPool(settings, "")

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"golang.org/x/sync/singleflight"
@@ -330,6 +331,90 @@ func (s *SettingService) InvalidateOpenAICodexTicketEnabledCache() {
 	}
 	s.openAICodexTicketEnabledSF.Forget(SettingKeyOpenAICodexTicketEnabled)
 	s.openAICodexTicketEnabledCache.Store(&cachedOpenAICodexTicketEnabled{expiresAt: 0})
+}
+
+type OpenAICodexTextRelaySettings struct {
+	Enabled bool
+	BaseURL string
+}
+
+type cachedOpenAICodexTextRelaySettings struct {
+	settings  OpenAICodexTextRelaySettings
+	expiresAt int64
+}
+
+const openAICodexTextRelaySettingsCacheTTL = 5 * time.Second
+
+func normalizeOpenAICodexTextRelaySettings(enabled bool, rawBaseURL, fallbackBaseURL string) OpenAICodexTextRelaySettings {
+	baseURL := strings.TrimSpace(rawBaseURL)
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(fallbackBaseURL)
+	}
+	normalized, err := config.NormalizeOpenAICodexBaseURL(baseURL)
+	if err != nil {
+		return OpenAICodexTextRelaySettings{BaseURL: config.DefaultOpenAICodexBaseURL}
+	}
+	return OpenAICodexTextRelaySettings{Enabled: enabled, BaseURL: normalized}
+}
+
+// GetOpenAICodexTextRelaySettings returns the hot-reloadable OAuth text relay policy.
+// Invalid persisted URLs fail closed to direct first-party routing.
+func (s *SettingService) GetOpenAICodexTextRelaySettings(ctx context.Context, fallbackBaseURL string) OpenAICodexTextRelaySettings {
+	fallback := normalizeOpenAICodexTextRelaySettings(false, "", fallbackBaseURL)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil || s == nil || s.settingRepo == nil {
+		return fallback
+	}
+	if cached, ok := s.openAICodexTextRelayCache.Load().(*cachedOpenAICodexTextRelaySettings); ok && cached != nil && time.Now().UnixNano() < cached.expiresAt {
+		return cached.settings
+	}
+
+	resultCh := s.openAICodexTextRelaySF.DoChan(SettingKeyOpenAICodexTextRelayEnabled, func() (any, error) {
+		if cached, ok := s.openAICodexTextRelayCache.Load().(*cachedOpenAICodexTextRelaySettings); ok && cached != nil && time.Now().UnixNano() < cached.expiresAt {
+			return cached.settings, nil
+		}
+		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		values, err := s.settingRepo.GetMultiple(dbCtx, []string{
+			SettingKeyOpenAICodexTextRelayEnabled,
+			SettingKeyOpenAICodexTextRelayBaseURL,
+		})
+		if err != nil {
+			if cached, ok := s.openAICodexTextRelayCache.Load().(*cachedOpenAICodexTextRelaySettings); ok && cached != nil {
+				return cached.settings, nil
+			}
+			return fallback, nil
+		}
+		settings := normalizeOpenAICodexTextRelaySettings(
+			values[SettingKeyOpenAICodexTextRelayEnabled] == "true",
+			values[SettingKeyOpenAICodexTextRelayBaseURL],
+			fallback.BaseURL,
+		)
+		s.openAICodexTextRelayCache.Store(&cachedOpenAICodexTextRelaySettings{
+			settings:  settings,
+			expiresAt: time.Now().Add(openAICodexTextRelaySettingsCacheTTL).UnixNano(),
+		})
+		return settings, nil
+	})
+	select {
+	case <-ctx.Done():
+		return fallback
+	case result := <-resultCh:
+		if settings, ok := result.Val.(OpenAICodexTextRelaySettings); ok && result.Err == nil {
+			return settings
+		}
+		return fallback
+	}
+}
+
+func (s *SettingService) InvalidateOpenAICodexTextRelaySettingsCache() {
+	if s == nil {
+		return
+	}
+	s.openAICodexTextRelaySF.Forget(SettingKeyOpenAICodexTextRelayEnabled)
+	s.openAICodexTextRelayCache.Store(&cachedOpenAICodexTextRelaySettings{expiresAt: 0})
 }
 
 type cachedOpenAICodexTicketHarvestProxy struct {

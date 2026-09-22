@@ -539,6 +539,11 @@ export default {
         codexTicketEnabled: '292 打票',
         codexTicketEnabledDesc:
           '关闭后不打票、不注入 x-codex-turn-state，按原链路转发。开启后后台打票，并在业务请求中覆盖该头。',
+        codexTextRelayEnabled: '文本请求中转',
+        codexTextRelayEnabledDesc:
+          '开启后，仅 OpenAI OAuth 文本 Responses、compact 与文本 WebSocket 请求通过自定义 URL；图片、Live、模型列表和 292 打票保持官方直连。',
+        codexTextRelayBaseURL: '文本中转 Base URL',
+        codexTextRelayBaseURLPlaceholder: 'https://relay.example.com/backend-api/codex',
         codexTicketHarvestProxy: '292 打票代理',
         codexTicketHarvestProxyDesc:
           '仅在门票功能开启时用于打票，日常业务仍走账号自己的住宅代理。在代理 URL 的会话位置填 __SESSION__，系统会为每个账号/模型生成独立的 12 位粘性会话；失败后会先更换会话，再次轮到该代理时使用新出口。保存后生效，无需重启；留空表示不改已保存的值。',

@@ -546,6 +546,11 @@ export default {
         codexTicketEnabled: "292 ticket harvest",
         codexTicketEnabledDesc:
           "When off, the gateway neither harvests nor injects x-codex-turn-state and forwards traffic as usual. When on, it harvests tickets in the background and overwrites that header on production requests.",
+        codexTextRelayEnabled: "Text request relay",
+        codexTextRelayEnabledDesc:
+          "When enabled, only OpenAI OAuth text Responses, compact, and text WebSocket requests use the custom URL. Images, Live, model discovery, and 292 harvesting remain direct.",
+        codexTextRelayBaseURL: "Text relay base URL",
+        codexTextRelayBaseURLPlaceholder: "https://relay.example.com/backend-api/codex",
         codexTicketHarvestProxy: "292 harvest proxy",
         codexTicketHarvestProxyDesc:
           "Used only for minting 292 tickets; production traffic still uses each account's residential proxy. Put __SESSION__ in the proxy URL's session position to give every account/model an independent 12-character sticky session. Failed probes rotate the session before this proxy is reused. Changes apply without a restart; leave blank to keep the stored value.",

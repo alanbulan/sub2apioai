@@ -258,6 +258,8 @@ type UpdateSettingsRequest struct {
 	OpenAICodexClientVersion                    *string                           `json:"openai_codex_client_version"`
 	OpenAICodexVersionAutoSyncEnabled           *bool                             `json:"openai_codex_version_auto_sync_enabled"`
 	OpenAICodexTicketEnabled                    *bool                             `json:"openai_codex_ticket_enabled"`
+	OpenAICodexTextRelayEnabled                 *bool                             `json:"openai_codex_text_relay_enabled"`
+	OpenAICodexTextRelayBaseURL                 *string                           `json:"openai_codex_text_relay_base_url"`
 	OpenAICodexTicketHarvestProxyURL            string                            `json:"openai_codex_ticket_harvest_proxy_url"`
 	OpenAICodexTicketProxyPool                  *[]service.OpenAICodexTicketProxy `json:"openai_codex_ticket_proxy_pool"`
 	OpenAICodexTicketRetryIntervalSeconds       *int                              `json:"openai_codex_ticket_retry_interval_seconds"`
@@ -1832,6 +1834,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpenAICodexTicketEnabled
 		}(),
+		OpenAICodexTextRelayEnabled: func() bool {
+			if req.OpenAICodexTextRelayEnabled != nil {
+				return *req.OpenAICodexTextRelayEnabled
+			}
+			return previousSettings.OpenAICodexTextRelayEnabled
+		}(),
+		OpenAICodexTextRelayBaseURL: func() string {
+			if req.OpenAICodexTextRelayBaseURL != nil {
+				return strings.TrimSpace(*req.OpenAICodexTextRelayBaseURL)
+			}
+			return previousSettings.OpenAICodexTextRelayBaseURL
+		}(),
 		OpenAICodexTicketHarvestProxyURL:            legacyCodexProxyURL,
 		OpenAICodexTicketProxyPool:                  codexProxyPool,
 		OpenAICodexTicketRetryIntervalSeconds:       codexRetryPolicy.RetryIntervalSeconds,
@@ -2381,6 +2395,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAICodexClientVersionSynced:                         updatedSettings.OpenAICodexClientVersionSynced,
 		OpenAICodexVersionAutoSyncEnabled:                      updatedSettings.OpenAICodexVersionAutoSyncEnabled,
 		OpenAICodexTicketEnabled:                               updatedSettings.OpenAICodexTicketEnabled,
+		OpenAICodexTextRelayEnabled:                            updatedSettings.OpenAICodexTextRelayEnabled,
+		OpenAICodexTextRelayBaseURL:                            updatedSettings.OpenAICodexTextRelayBaseURL,
 		OpenAICodexTicketHarvestProxyURL:                       service.MaskProxyURL(updatedSettings.OpenAICodexTicketHarvestProxyURL),
 		OpenAICodexTicketHarvestProxyConfigured:                strings.TrimSpace(updatedSettings.OpenAICodexTicketHarvestProxyURL) != "" || len(updatedSettings.OpenAICodexTicketProxyPool) > 0,
 		OpenAICodexTicketProxyPool:                             service.MaskOpenAICodexTicketProxyPool(updatedSettings.OpenAICodexTicketProxyPool),

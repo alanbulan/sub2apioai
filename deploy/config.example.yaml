@@ -311,6 +311,11 @@ gateway:
   # Use this to avoid compact failures when newer models are not yet supported by the compact endpoint.
   # 当 compact 端点暂未支持更新模型时，可通过这里降级规避失败。
   openai_compact_model: "gpt-5.5"
+  # Default base URL for the optional OAuth text relay in Admin Settings.
+  # It affects text Responses/compact/WebSocket traffic only when that switch is enabled.
+  # 后台可选 OAuth 文本中转的默认基地址；仅在开关开启时影响文本请求。
+  # Env: GATEWAY_OPENAI_CODEX_BASE_URL=https://relay.example.com/backend-api/codex
+  openai_codex_base_url: "https://chatgpt.com/backend-api/codex"
   # ChatGPT OAuth x-codex-turn-state ticket: harvest a 292-length header via a
   # dedicated HTTP(S)/SOCKS proxies, retain fresh routing cookies, and inject both on
   # production requests. The observed validity window is managed as 70 seconds. Off by default.

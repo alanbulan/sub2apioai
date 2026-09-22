@@ -735,6 +735,29 @@ describe("admin SettingsView payment visible method controls", () => {
     wrapper.unmount();
   });
 
+  it("loads and submits the Codex text relay settings", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_codex_text_relay_enabled: false,
+      openai_codex_text_relay_base_url: "https://chatgpt.com/backend-api/codex",
+    });
+    const wrapper = mountView();
+    await flushPromises();
+
+    await wrapper.get("#codex-text-relay-enabled").setValue(true);
+    await wrapper
+      .get("#codex-text-relay-base-url")
+      .setValue(" https://relay.example.com/backend-api/codex ");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      openai_codex_text_relay_enabled: true,
+      openai_codex_text_relay_base_url: "https://relay.example.com/backend-api/codex",
+    }));
+    wrapper.unmount();
+  });
+
   it("loads a masked Codex proxy-pool node and submits its replacement URL", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,

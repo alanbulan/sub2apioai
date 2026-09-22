@@ -486,6 +486,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.OpenAICodexTicketEnabled != after.OpenAICodexTicketEnabled {
 		changed = append(changed, "openai_codex_ticket_enabled")
 	}
+	if before.OpenAICodexTextRelayEnabled != after.OpenAICodexTextRelayEnabled {
+		changed = append(changed, "openai_codex_text_relay_enabled")
+	}
+	if before.OpenAICodexTextRelayBaseURL != after.OpenAICodexTextRelayBaseURL {
+		changed = append(changed, "openai_codex_text_relay_base_url")
+	}
 	if before.OpenAICodexTicketHarvestProxyURL != after.OpenAICodexTicketHarvestProxyURL {
 		changed = append(changed, "openai_codex_ticket_harvest_proxy_url")
 	}

@@ -44,7 +44,7 @@ var sseDataPrefix = regexp.MustCompile(`^data:\s*`)
 
 const (
 	testClaudeAPIURL            = "https://api.anthropic.com/v1/messages?beta=true"
-	chatgptCodexAPIURL          = "https://chatgpt.com/backend-api/codex/responses"
+	chatgptCodexAPIURL          = config.DefaultOpenAICodexBaseURL + "/responses"
 	defaultAntigravityTestModel = "claude-sonnet-4-6"
 )
 
@@ -809,7 +809,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		}
 
 		// OAuth uses ChatGPT internal API
-		apiURL = chatgptCodexAPIURL
+		apiURL = s.openAICodexTextResponsesURL()
 	} else if credentialAccount.Type == "apikey" {
 		// API Key - use Platform API
 		authToken = credentialAccount.GetOpenAIProtocolAPIKey()
@@ -882,7 +882,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 
 	// Set OAuth-specific headers for ChatGPT internal API
 	if isOAuth {
-		req.Host = "chatgpt.com"
+		setOpenAICodexRequestHost(req)
 		req.Header.Set("accept", "text/event-stream")
 		req.Header.Set("OpenAI-Beta", "responses=experimental")
 		canonical := resolveCodexOutboundIdentity("")
@@ -2161,7 +2161,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 		if authToken == "" && !credentialAccount.IsOpenAIAgentIdentity() {
 			return s.sendErrorAndEnd(c, "No access token available")
 		}
-		apiURL = chatgptCodexAPIURL
+		apiURL = s.openAICodexTextResponsesURL()
 	case account.Type == AccountTypeAPIKey:
 		authToken = account.GetOpenAIProtocolAPIKey()
 		if authToken == "" {
@@ -2227,7 +2227,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	req.Header.Set("Conversation_ID", probeSessionID)
 
 	if isOAuth {
-		req.Host = "chatgpt.com"
+		setOpenAICodexRequestHost(req)
 		setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
 		// 指纹收敛：探测与真实转发走同一个 /responses 端点，身份也必须同构，
 		// 否则探测流量会以「缺 x-codex-installation-id + 非收敛 session」的
@@ -3119,7 +3119,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 		return s.sendErrorAndEnd(c, "Failed to create request")
 	}
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
-	req.Host = "chatgpt.com"
+	setOpenAICodexRequestHost(req)
 	if credentialAccount.IsOpenAIAgentIdentity() {
 		authHeaders, authErr := buildAgentIdentityAuthenticationHeaders(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, credentialAccount)
 		if authErr != nil {

@@ -4517,6 +4517,34 @@
                   />
                 </div>
                 <div class="space-y-3 border-t border-gray-100 pt-4 dark:border-dark-700">
+                  <div class="flex items-center justify-between gap-4">
+                    <div class="min-w-0">
+                      <h3 class="text-base font-semibold text-gray-900 dark:text-white">
+                        {{ t("admin.settings.gatewayForwarding.codexTextRelayEnabled") }}
+                      </h3>
+                      <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.gatewayForwarding.codexTextRelayEnabledDesc") }}
+                      </p>
+                    </div>
+                    <Toggle
+                      id="codex-text-relay-enabled"
+                      v-model="form.openai_codex_text_relay_enabled"
+                    />
+                  </div>
+                  <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.gatewayForwarding.codexTextRelayBaseURL") }}
+                    <input
+                      id="codex-text-relay-base-url"
+                      v-model="form.openai_codex_text_relay_base_url"
+                      type="url"
+                      class="input mt-2 w-full font-mono text-sm"
+                      :placeholder="t('admin.settings.gatewayForwarding.codexTextRelayBaseURLPlaceholder')"
+                      autocomplete="off"
+                      spellcheck="false"
+                    />
+                  </label>
+                </div>
+                <div class="space-y-3 border-t border-gray-100 pt-4 dark:border-dark-700">
                   <div class="flex flex-wrap items-start justify-between gap-3">
                     <div class="min-w-0">
                       <h3 class="text-base font-semibold text-gray-900 dark:text-white">
@@ -9999,6 +10027,9 @@ const form = reactive<SettingsForm>({
   openai_codex_client_version_synced: "",
   openai_codex_version_auto_sync_enabled: true,
   openai_codex_ticket_enabled: false,
+  openai_codex_text_relay_enabled: false,
+  openai_codex_text_relay_base_url:
+    "https://chatgpt.com/backend-api/codex",
   openai_codex_ticket_harvest_proxy_url: "",
   openai_codex_ticket_harvest_proxy_configured: false,
   openai_codex_ticket_proxy_pool: [] as OpenAICodexTicketProxy[],
@@ -11656,6 +11687,10 @@ async function saveSettings() {
       openai_codex_version_auto_sync_enabled:
         form.openai_codex_version_auto_sync_enabled,
       openai_codex_ticket_enabled: form.openai_codex_ticket_enabled,
+      openai_codex_text_relay_enabled:
+        form.openai_codex_text_relay_enabled,
+      openai_codex_text_relay_base_url:
+        form.openai_codex_text_relay_base_url?.trim() || "",
       openai_codex_ticket_proxy_pool: form.openai_codex_ticket_proxy_pool.map(
         (proxy) => ({
           ...proxy,

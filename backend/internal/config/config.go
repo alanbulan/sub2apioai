@@ -21,6 +21,9 @@ import (
 const (
 	RunModeStandard = "standard"
 	RunModeSimple   = "simple"
+
+	// DefaultOpenAICodexBaseURL is the first-party OAuth Codex API root.
+	DefaultOpenAICodexBaseURL = "https://chatgpt.com/backend-api/codex"
 )
 
 // 使用量记录队列溢出策略
@@ -1004,6 +1007,9 @@ type GatewayConfig struct {
 	// OpenAICompactModel: /responses/compact 上游使用的模型。
 	// compact 端点支持模型滞后于普通 /responses 时，可用该配置降级规避上游错误。
 	OpenAICompactModel string `mapstructure:"openai_compact_model"`
+	// OpenAICodexBaseURL: OAuth/Setup Token 文本中转的默认基地址。
+	// 仅在后台文本中转开关开启且未另存 URL 时使用。
+	OpenAICodexBaseURL string `mapstructure:"openai_codex_base_url"`
 	// OpenAICodexTicket: ChatGPT OAuth 账号按 (账号, 模型) 捕获 292 长度
 	// x-codex-turn-state，并在住宅 IP 业务请求中注入该头。默认关闭。
 	OpenAICodexTicket OpenAICodexTicketConfig `mapstructure:"openai_codex_ticket"`
@@ -2400,6 +2406,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
 	viper.SetDefault("gateway.openai_passthrough_allow_timeout_headers", false)
 	viper.SetDefault("gateway.openai_compact_model", "gpt-5.5")
+	viper.SetDefault("gateway.openai_codex_base_url", DefaultOpenAICodexBaseURL)
 	viper.SetDefault("gateway.openai_codex_ticket.enabled", false)
 	viper.SetDefault("gateway.openai_codex_ticket.target_length", 292)
 	viper.SetDefault("gateway.openai_codex_ticket.ttl_seconds", 70)
@@ -3334,6 +3341,11 @@ func (c *Config) Validate() error {
 		(c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds > 0 && c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds < 30) {
 		return fmt.Errorf("gateway.openai_high_effort_first_output_timeout_seconds must be 0 or between 30-1800 seconds")
 	}
+	codexBaseURL, err := NormalizeOpenAICodexBaseURL(c.Gateway.OpenAICodexBaseURL)
+	if err != nil {
+		return fmt.Errorf("gateway.openai_codex_base_url: %w", err)
+	}
+	c.Gateway.OpenAICodexBaseURL = codexBaseURL
 	if c.Gateway.Live.MaxSessionDurationSeconds <= 0 {
 		c.Gateway.Live.MaxSessionDurationSeconds = 3600
 	}
@@ -3836,6 +3848,33 @@ func ValidateAbsoluteHTTPURL(raw string) error {
 		return fmt.Errorf("must not include fragment")
 	}
 	return nil
+}
+
+// NormalizeOpenAICodexBaseURL validates and canonicalizes a trusted Codex relay root.
+func NormalizeOpenAICodexBaseURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = DefaultOpenAICodexBaseURL
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	if !u.IsAbs() || !strings.EqualFold(u.Scheme, "https") {
+		return "", fmt.Errorf("must be an absolute https URL")
+	}
+	if strings.TrimSpace(u.Host) == "" {
+		return "", fmt.Errorf("missing host")
+	}
+	if u.User != nil {
+		return "", fmt.Errorf("must not include user info")
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("must not include query or fragment")
+	}
+	u.Path = strings.TrimRight(u.Path, "/")
+	u.RawPath = ""
+	return u.String(), nil
 }
 
 // ValidateFrontendRedirectURL 验证前端重定向 URL（可以是绝对 URL 或相对路径）

@@ -486,6 +486,13 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyOpenAICodexClientVersion] = NormalizeCodexClientVersion(settings.OpenAICodexClientVersion)
 	updates[SettingKeyOpenAICodexVersionAutoSyncEnabled] = strconv.FormatBool(settings.OpenAICodexVersionAutoSyncEnabled)
 	updates[SettingKeyOpenAICodexTicketEnabled] = strconv.FormatBool(settings.OpenAICodexTicketEnabled)
+	updates[SettingKeyOpenAICodexTextRelayEnabled] = strconv.FormatBool(settings.OpenAICodexTextRelayEnabled)
+	codexTextRelayBaseURL, err := config.NormalizeOpenAICodexBaseURL(settings.OpenAICodexTextRelayBaseURL)
+	if err != nil {
+		return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_TEXT_RELAY_URL", err.Error())
+	}
+	settings.OpenAICodexTextRelayBaseURL = codexTextRelayBaseURL
+	updates[SettingKeyOpenAICodexTextRelayBaseURL] = codexTextRelayBaseURL
 	if err := ValidateOpenAICodexTicketHarvestProxyURL(settings.OpenAICodexTicketHarvestProxyURL); err != nil {
 		return nil, infraerrors.BadRequest("INVALID_CODEX_HARVEST_PROXY", err.Error())
 	}
@@ -783,6 +790,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	// 这里没有它的最新值，重算会把同步结果覆盖成陈旧值。
 	s.InvalidateOpenAICodexClientVersionCache()
 	s.InvalidateOpenAICodexTicketEnabledCache()
+	s.InvalidateOpenAICodexTextRelaySettingsCache()
 	s.InvalidateOpenAICodexTicketHarvestProxyCache()
 	s.InvalidateOpenAICodexTicketRuntimeSettingsCache()
 	openAIAdvancedSchedulerSettingSF.Forget(openAIAdvancedSchedulerSettingKey)

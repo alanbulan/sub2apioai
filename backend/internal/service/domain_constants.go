@@ -711,6 +711,11 @@ const (
 	// 关闭：不打票、不注入 x-codex-turn-state，按原链路转发。
 	// 开启：后台打票并在业务请求中覆盖该头。
 	SettingKeyOpenAICodexTicketEnabled = "openai_codex_ticket_enabled"
+	// SettingKeyOpenAICodexTextRelayEnabled controls whether OAuth text Responses
+	// traffic uses the configured compatible relay instead of ChatGPT directly.
+	SettingKeyOpenAICodexTextRelayEnabled = "openai_codex_text_relay_enabled"
+	// SettingKeyOpenAICodexTextRelayBaseURL stores the trusted Codex relay root.
+	SettingKeyOpenAICodexTextRelayBaseURL = "openai_codex_text_relay_base_url"
 	// SettingKeyOpenAICodexTicketHarvestProxyURL Codex 292 打票出口（socks5h/http），后台可改、热更新。
 	SettingKeyOpenAICodexTicketHarvestProxyURL = "openai_codex_ticket_harvest_proxy_url"
 	// SettingKeyOpenAICodexTicketProxyPool stores the ordered, weighted harvest proxy list as JSON.
