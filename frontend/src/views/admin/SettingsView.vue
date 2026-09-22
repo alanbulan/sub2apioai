@@ -4632,7 +4632,7 @@
                         :placeholder="t('admin.settings.gatewayForwarding.codexTicketHarvestProxyPlaceholder')"
                         autocomplete="off"
                       />
-                      <div class="grid gap-3 sm:grid-cols-2">
+                      <div class="grid gap-3 sm:grid-cols-3">
                         <label class="text-xs font-medium text-gray-600 dark:text-gray-300">
                           {{ t("admin.settings.gatewayForwarding.codexTicketProxyPriority") }}
                           <input
@@ -4650,6 +4650,16 @@
                             type="number"
                             min="1"
                             max="100"
+                            class="input mt-1 w-full text-sm"
+                          />
+                        </label>
+                        <label class="text-xs font-medium text-gray-600 dark:text-gray-300">
+                          {{ t("admin.settings.gatewayForwarding.codexTicketProxyParallelism") }}
+                          <input
+                            v-model.number="proxy.parallelism"
+                            type="number"
+                            min="1"
+                            max="10"
                             class="input mt-1 w-full text-sm"
                           />
                         </label>
@@ -4671,7 +4681,7 @@
                 <div class="grid gap-4 border-t border-gray-100 pt-4 sm:grid-cols-2 dark:border-dark-700">
                   <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
                     {{ t("admin.settings.gatewayForwarding.codexTicketRetryInterval") }}
-                    <input v-model.number="form.openai_codex_ticket_retry_interval_seconds" type="number" min="5" max="86400" class="input mt-2 w-full" />
+                    <input v-model.number="form.openai_codex_ticket_retry_interval_seconds" type="number" min="1" max="86400" class="input mt-2 w-full" />
                   </label>
                   <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
                     {{ t("admin.settings.gatewayForwarding.codexTicketManualCooldown") }}
@@ -11040,6 +11050,7 @@ function addCodexTicketProxy(): void {
     enabled: true,
     priority: 0,
     weight: 100,
+    parallelism: 1,
     rotate_on_failure: false,
   });
 }
@@ -11698,6 +11709,7 @@ async function saveSettings() {
           url: proxy.url.trim(),
           priority: Number(proxy.priority),
           weight: Number(proxy.weight),
+          parallelism: Number(proxy.parallelism),
           rotate_on_failure: Boolean(proxy.rotate_on_failure),
         }),
       ),

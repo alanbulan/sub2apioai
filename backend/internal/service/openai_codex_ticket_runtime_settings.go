@@ -18,13 +18,15 @@ const (
 	OpenAICodexTicketTTLSecondsDefault                 = 70
 	OpenAICodexTicketRefreshBeforeSecondsDefault       = 30
 
-	openAICodexTicketProxyPoolMaxSize        = 32
-	openAICodexTicketRetryIntervalMax        = 24 * 60 * 60
-	openAICodexTicketManualCooldownMax       = 24 * 60 * 60
-	openAICodexTicketTTLSecondsMax           = 24 * 60 * 60
-	openAICodexTicketRuntimeSettingsCacheTTL = 5 * time.Second
-	openAICodexTicketLegacyProxyID           = "legacy"
-	openAICodexTicketConfigProxyID           = "config"
+	openAICodexTicketProxyPoolMaxSize         = 32
+	openAICodexTicketProxyParallelismMax      = 10
+	openAICodexTicketProxyTotalParallelismMax = 64
+	openAICodexTicketRetryIntervalMax         = 24 * 60 * 60
+	openAICodexTicketManualCooldownMax        = 24 * 60 * 60
+	openAICodexTicketTTLSecondsMax            = 24 * 60 * 60
+	openAICodexTicketRuntimeSettingsCacheTTL  = 5 * time.Second
+	openAICodexTicketLegacyProxyID            = "legacy"
+	openAICodexTicketConfigProxyID            = "config"
 )
 
 var openAICodexTicketProxyIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -38,6 +40,7 @@ type OpenAICodexTicketProxy struct {
 	Enabled         bool   `json:"enabled"`
 	Priority        int    `json:"priority"`
 	Weight          int    `json:"weight"`
+	Parallelism     int    `json:"parallelism"`
 	RotateOnFailure bool   `json:"rotate_on_failure,omitempty"`
 }
 
@@ -95,7 +98,7 @@ func (s OpenAICodexTicketRuntimeSettings) Fingerprint() [sha256.Size]byte {
 }
 
 func normalizeOpenAICodexTicketRetryInterval(value int) int {
-	if value < 5 || value > openAICodexTicketRetryIntervalMax {
+	if value < 1 || value > openAICodexTicketRetryIntervalMax {
 		return OpenAICodexTicketRetryIntervalSecondsDefault
 	}
 	return value
@@ -161,6 +164,7 @@ func normalizeOpenAICodexTicketProxyPool(pool []OpenAICodexTicketProxy) ([]OpenA
 	result := make([]OpenAICodexTicketProxy, 0, len(pool))
 	seen := make(map[string]struct{}, len(pool))
 	rotateNodeCount := 0
+	totalParallelism := 0
 	for index, item := range pool {
 		item.ID = strings.TrimSpace(item.ID)
 		item.Name = strings.TrimSpace(item.Name)
@@ -186,6 +190,18 @@ func normalizeOpenAICodexTicketProxyPool(pool []OpenAICodexTicketProxy) ([]OpenA
 		}
 		if item.Weight < 1 || item.Weight > 100 {
 			return nil, fmt.Errorf("codex ticket proxy %d weight must be between 1 and 100", index+1)
+		}
+		if item.Parallelism == 0 {
+			item.Parallelism = 1
+		}
+		if item.Parallelism < 1 || item.Parallelism > openAICodexTicketProxyParallelismMax {
+			return nil, fmt.Errorf("codex ticket proxy %d parallelism must be between 1 and %d", index+1, openAICodexTicketProxyParallelismMax)
+		}
+		if item.Enabled {
+			totalParallelism += item.Parallelism
+			if totalParallelism > openAICodexTicketProxyTotalParallelismMax {
+				return nil, fmt.Errorf("codex ticket proxy pool may use at most %d parallel attempts", openAICodexTicketProxyTotalParallelismMax)
+			}
 		}
 		if item.RotateOnFailure {
 			if openAICodexTicketProxyUsesSessions(item.URL) {
@@ -232,12 +248,13 @@ func syntheticOpenAICodexTicketProxy(id, name, rawURL string) []OpenAICodexTicke
 		return []OpenAICodexTicketProxy{}
 	}
 	return []OpenAICodexTicketProxy{{
-		ID:       id,
-		Name:     name,
-		URL:      rawURL,
-		Enabled:  true,
-		Priority: 0,
-		Weight:   100,
+		ID:          id,
+		Name:        name,
+		URL:         rawURL,
+		Enabled:     true,
+		Priority:    0,
+		Weight:      100,
+		Parallelism: 1,
 	}}
 }
 
@@ -297,8 +314,8 @@ func ReconcileOpenAICodexTicketProxyPool(next, previous []OpenAICodexTicketProxy
 }
 
 func validateOpenAICodexTicketRuntimePolicy(settings OpenAICodexTicketRuntimeSettings) error {
-	if settings.RetryIntervalSeconds < 5 || settings.RetryIntervalSeconds > openAICodexTicketRetryIntervalMax {
-		return fmt.Errorf("%s must be between 5 and %d", SettingKeyOpenAICodexTicketRetryIntervalSeconds, openAICodexTicketRetryIntervalMax)
+	if settings.RetryIntervalSeconds < 1 || settings.RetryIntervalSeconds > openAICodexTicketRetryIntervalMax {
+		return fmt.Errorf("%s must be between 1 and %d", SettingKeyOpenAICodexTicketRetryIntervalSeconds, openAICodexTicketRetryIntervalMax)
 	}
 	if settings.ManualRetryCooldownSeconds < 5 || settings.ManualRetryCooldownSeconds > openAICodexTicketManualCooldownMax {
 		return fmt.Errorf("%s must be between 5 and %d", SettingKeyOpenAICodexTicketManualRetryCooldownSeconds, openAICodexTicketManualCooldownMax)

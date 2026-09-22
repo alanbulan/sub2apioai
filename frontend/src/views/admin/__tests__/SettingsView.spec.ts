@@ -768,6 +768,7 @@ describe("admin SettingsView payment visible method controls", () => {
         enabled: true,
         priority: 0,
         weight: 100,
+        parallelism: 3,
         rotate_on_failure: true,
       }],
       openai_codex_ticket_harvest_proxy_configured: true,
@@ -788,6 +789,7 @@ describe("admin SettingsView payment visible method controls", () => {
       enabled: true,
       priority: 0,
       weight: 100,
+      parallelism: 3,
       rotate_on_failure: true,
     }]);
     expect(updateSettings.mock.calls[0]?.[0]).not.toHaveProperty("openai_codex_ticket_harvest_proxy_configured");

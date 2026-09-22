@@ -61,6 +61,31 @@ func TestCodexTicketProbeDoesNotSendStoredRouteCookie(t *testing.T) {
 	require.Empty(t, sentCookie)
 }
 
+func TestCodexTicketProbeUsesFreshTicketWithCachedRouteCookie(t *testing.T) {
+	upstream := &codexTicketFuncUpstream{do: func(req *http.Request) (*http.Response, error) {
+		header := http.Header{}
+		header.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     header,
+			Body:       io.NopCloser(strings.NewReader(codexTicketProbeSuccessSSE(codexTicketProbeModelFromRequest(req)))),
+		}, nil
+	}}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled:      true,
+		TargetLength: 292,
+	}, upstream)
+	settings := DefaultOpenAICodexTicketRuntimeSettings()
+	settings.ProxyPool = []OpenAICodexTicketProxy{testCodexProxy("dynamic", 0, 1)}
+	account := ticketTestAccount(41)
+
+	svc.probeOnceOpenAICodexTicketWithSettings(context.Background(), account, "gpt-6-astra", settings)
+
+	ticket := svc.lookupOpenAICodexTicket(account, "gpt-6-astra")
+	require.True(t, ticket.valid(time.Now(), 292, settings.TTL()))
+	require.Equal(t, "route-test", svc.lookupOpenAICodexRouteCookie(account).Values["__cflb"])
+}
+
 func TestApplyCodexTicketMergesRouteCookies(t *testing.T) {
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
 		Enabled:      true,

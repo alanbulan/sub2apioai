@@ -404,6 +404,7 @@ export interface OpenAICodexTicketProxy {
   enabled: boolean;
   priority: number;
   weight: number;
+  parallelism: number;
   rotate_on_failure?: boolean;
 }
 

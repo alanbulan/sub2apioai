@@ -31,7 +31,6 @@ const (
 	openAICodexTicketDefaultModel    = "gpt-6-astra"
 	openAICodexTicketDefaultSolModel = "gpt-5.6-sol"
 	openAICodexTicketManualTimeout   = 15 * time.Second
-	openAICodexTicketProbeFanout     = 4
 
 	// A proxy URL containing this token gets an independent sticky session for
 	// every account/model pair. The token is replaced locally and is never sent
@@ -77,6 +76,7 @@ type openAICodexTicketProbeState struct {
 }
 
 type openAICodexTicketProbeAttempt struct {
+	selectionIndex  int
 	selection       openAICodexTicketSelectedProxy
 	proxyTemplate   string
 	proxySessionKey string
@@ -949,9 +949,10 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 	}
 }
 
-// probeOnceOpenAICodexTicket races up to four distinct proxy exits. The first
-// verified ticket wins and cancels the remaining attempts. A full miss counts
-// as one retry round regardless of the number of exits tried.
+// probeOnceOpenAICodexTicket races every enabled proxy exit using each node's
+// configured parallelism. The first verified ticket wins and cancels the
+// remaining attempts. A full miss counts as one retry round regardless of the
+// number of exits tried.
 func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, account *Account, model string) bool {
 	return s.probeOnceOpenAICodexTicketWithSettings(ctx, account, model, s.openAICodexTicketRuntimeSettingsContext(ctx))
 }
@@ -980,47 +981,72 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicketWithSettings(ctx contex
 				zap.Int("failures", probeState.Failures), zap.Int64("retry_in_seconds", int64(time.Until(probeState.RetryAt)/time.Second)))
 			return false, nil
 		}
-		selections := s.openaiCodexTicketProxyPool.selectProxies(key, runtimeSettings, time.Now(), openAICodexTicketProbeFanout)
+		selections := s.openaiCodexTicketProxyPool.selectProxies(key, runtimeSettings, time.Now(), runtimeSettings.EnabledProxyCount())
 		if len(selections) == 0 {
 			return false, nil
 		}
 
 		roundCtx, cancelRound := context.WithCancel(ctx)
 		defer cancelRound()
-		attempts := make(chan openAICodexTicketProbeAttempt, len(selections))
-		for _, selection := range selections {
+		totalAttempts := 0
+		remainingBySelection := make([]int, len(selections))
+		for index, selection := range selections {
+			parallelism := selection.proxy.Parallelism
+			if parallelism < 1 {
+				parallelism = 1
+			}
+			remainingBySelection[index] = parallelism
+			totalAttempts += parallelism
+		}
+		attempts := make(chan openAICodexTicketProbeAttempt, totalAttempts)
+		for selectionIndex, selection := range selections {
 			selection := selection
-			proxyTemplate := selection.proxy.URL
-			proxySessionKey := openAICodexTicketProxySessionKey(key, selection.proxy.ID)
-			proxyURL := s.openAICodexTicketProbeProxyURL(proxySessionKey, proxyTemplate)
-			go func() {
-				defer selection.release()
-				probeResult, probeErr := s.fireOpenAICodexTicketProbe(
-					roundCtx, account, token, model, proxyURL,
-					time.Duration(cfg.HarvestAttemptTimeoutSeconds)*time.Second,
-				)
-				attempts <- openAICodexTicketProbeAttempt{
-					selection:       selection,
-					proxyTemplate:   proxyTemplate,
-					proxySessionKey: proxySessionKey,
-					result:          probeResult,
-					err:             probeErr,
+			parallelism := remainingBySelection[selectionIndex]
+			for slot := 0; slot < parallelism; slot++ {
+				proxyTemplate := selection.proxy.URL
+				proxySessionKey := openAICodexTicketProxySessionKey(key, selection.proxy.ID)
+				if parallelism > 1 {
+					proxySessionKey += "\x00slot\x00" + strconv.Itoa(slot)
 				}
-			}()
+				proxyURL := s.openAICodexTicketProbeProxyURL(proxySessionKey, proxyTemplate)
+				go func(selectionIndex int, proxyTemplate, proxySessionKey, proxyURL string) {
+					probeResult, probeErr := s.fireOpenAICodexTicketProbe(
+						roundCtx, account, token, model, proxyURL,
+						time.Duration(cfg.HarvestAttemptTimeoutSeconds)*time.Second,
+					)
+					attempts <- openAICodexTicketProbeAttempt{
+						selectionIndex:  selectionIndex,
+						selection:       selection,
+						proxyTemplate:   proxyTemplate,
+						proxySessionKey: proxySessionKey,
+						result:          probeResult,
+						err:             probeErr,
+					}
+				}(selectionIndex, proxyTemplate, proxySessionKey, proxyURL)
+			}
 		}
 
 		rotateFixedProxy := false
 		var diagnostic openAICodexTicketProbeAttempt
 		harvested := false
 		completed := 0
-		for completed < len(selections) {
+		for completed < totalAttempts {
 			attempt := <-attempts
 			completed++
-			if !harvested && attempt.err == nil && attempt.result.verified() {
+			remainingBySelection[attempt.selectionIndex]--
+			if remainingBySelection[attempt.selectionIndex] == 0 {
+				attempt.selection.release()
+			}
+			if !harvested && attempt.err == nil && attempt.result.ticketVerified() {
 				cancelRound()
 				now := time.Now()
 				ttl := runtimeSettings.TTL()
-				routeCookie := newOpenAICodexRouteCookie(account.ID, attempt.result.RouteCookies, now, ttl)
+				capturedRouteCookie := newOpenAICodexRouteCookie(account.ID, attempt.result.RouteCookies, now, ttl)
+				routeCookie := capturedRouteCookie
+				cookieUpdated := routeCookie.valid(now, ttl)
+				if !cookieUpdated {
+					routeCookie = s.lookupOpenAICodexRouteCookie(account)
+				}
 				if routeCookie.valid(now, ttl) {
 					s.openaiCodexTicketProbeStates.Delete(key)
 					s.openaiCodexTicketProxyPool.clearAttempts(key)
@@ -1034,19 +1060,24 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicketWithSettings(ctx contex
 						ExpiresAt:  now.Add(ttl),
 						Attempts:   completed,
 					}
-					s.storeOpenAICodexTicket(ctx, account, ticket, routeCookie)
+					if cookieUpdated {
+						s.storeOpenAICodexTicket(ctx, account, ticket, capturedRouteCookie)
+					} else {
+						s.storeOpenAICodexTicket(ctx, account, ticket, nil)
+					}
 					logger.L().Info("openai_codex_ticket harvested",
 						zap.Int64("account_id", account.ID), zap.String("model", model),
 						zap.String("proxy_id", attempt.selection.proxy.ID),
 						zap.Int("length", ticket.Length), zap.Int("cookie_count", len(routeCookie.Values)),
-						zap.Bool("cookie_updated", true), zap.Int("fanout", len(selections)),
+						zap.Bool("cookie_updated", cookieUpdated), zap.Int("proxy_count", len(selections)),
+						zap.Int("fanout", totalAttempts),
 						zap.Int("completed_attempts", completed), zap.String("mode", "continuous"))
 					harvested = true
 					continue
 				}
 				attempt.result.Verdict = openAICodexTicketProbeMissingCookie
 			}
-			if harvested && attempt.err == nil && attempt.result.verified() {
+			if harvested && attempt.err == nil && attempt.result.ticketVerified() {
 				continue
 			}
 

@@ -44,6 +44,13 @@ func (r openAICodexTicketProbeResult) verified() bool {
 	return r.Verdict == openAICodexTicketProbeVerified
 }
 
+// ticketVerified accepts a fully verified ticket even when that response did
+// not refresh the routing cookie. The harvester may pair it with the account's
+// still-valid cookie because ticket and routing-cookie lifetimes are independent.
+func (r openAICodexTicketProbeResult) ticketVerified() bool {
+	return r.Verdict == openAICodexTicketProbeVerified || r.Verdict == openAICodexTicketProbeMissingCookie
+}
+
 // inspectOpenAICodexTicketProbeResponse performs cheap header checks first.
 // Only a candidate target-length ticket is allowed to read the SSE body, so
 // obvious misses do not consume additional residential-proxy traffic.

@@ -12,12 +12,13 @@ import (
 
 func testCodexProxy(id string, priority, weight int) OpenAICodexTicketProxy {
 	return OpenAICodexTicketProxy{
-		ID:       id,
-		Name:     id,
-		URL:      "http://user:secret@" + id + ".example:8080",
-		Enabled:  true,
-		Priority: priority,
-		Weight:   weight,
+		ID:          id,
+		Name:        id,
+		URL:         "http://user:secret@" + id + ".example:8080",
+		Enabled:     true,
+		Priority:    priority,
+		Weight:      weight,
+		Parallelism: 1,
 	}
 }
 
@@ -85,8 +86,8 @@ func TestOpenAICodexTicketProxyPoolSelectsDistinctFanout(t *testing.T) {
 		testCodexProxy("fourth", 20, 1),
 	}
 	var runtime openAICodexTicketProxyPoolRuntime
-	selected := runtime.selectProxies("same-key", settings, time.Now(), openAICodexTicketProbeFanout)
-	require.Len(t, selected, openAICodexTicketProbeFanout)
+	selected := runtime.selectProxies("same-key", settings, time.Now(), settings.EnabledProxyCount())
+	require.Len(t, selected, settings.EnabledProxyCount())
 	ids := make([]string, 0, len(selected))
 	for _, proxy := range selected {
 		ids = append(ids, proxy.proxy.ID)
@@ -100,6 +101,18 @@ func TestOpenAICodexTicketRuntimeDefaultsUseShortObservedLifetime(t *testing.T) 
 	require.Equal(t, 70*time.Second, settings.TTL())
 	require.Equal(t, 30*time.Second, settings.RefreshBefore())
 	require.Equal(t, 6*time.Second, settings.RetryInterval())
+}
+
+func TestOpenAICodexTicketProxyPoolNormalizesParallelism(t *testing.T) {
+	proxy := testCodexProxy("dynamic", 0, 1)
+	proxy.Parallelism = 0
+	normalized, err := normalizeOpenAICodexTicketProxyPool([]OpenAICodexTicketProxy{proxy})
+	require.NoError(t, err)
+	require.Equal(t, 1, normalized[0].Parallelism)
+
+	proxy.Parallelism = openAICodexTicketProxyParallelismMax + 1
+	_, err = normalizeOpenAICodexTicketProxyPool([]OpenAICodexTicketProxy{proxy})
+	require.Error(t, err)
 }
 
 func TestOpenAICodexTicketPoolFingerprintResetsRetryWaitAcrossNodeChanges(t *testing.T) {

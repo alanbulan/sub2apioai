@@ -542,9 +542,10 @@ func fourCodexTicketTestProxies() []OpenAICodexTicketProxy {
 }
 
 func TestOpenAICodexTicketProbeRacesFourProxiesAndCancelsLosers(t *testing.T) {
+	const fanout = 4
 	upstream := &codexTicketFanoutUpstream{
 		winner:   "winner.example",
-		expected: openAICodexTicketProbeFanout,
+		expected: fanout,
 		ready:    make(chan struct{}),
 	}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
@@ -558,14 +559,14 @@ func TestOpenAICodexTicketProbeRacesFourProxiesAndCancelsLosers(t *testing.T) {
 	account := ticketTestAccount(41)
 
 	require.False(t, svc.probeOnceOpenAICodexTicketWithSettings(context.Background(), account, "gpt-6-astra", settings))
-	require.Equal(t, int64(openAICodexTicketProbeFanout), upstream.started.Load())
-	require.Equal(t, int64(openAICodexTicketProbeFanout-1), upstream.canceled.Load())
+	require.Equal(t, int64(fanout), upstream.started.Load())
+	require.Equal(t, int64(fanout-1), upstream.canceled.Load())
 
 	upstream.mu.Lock()
 	proxies := append([]string(nil), upstream.proxies...)
 	upstream.mu.Unlock()
-	require.Len(t, proxies, openAICodexTicketProbeFanout)
-	require.Len(t, map[string]struct{}{proxies[0]: {}, proxies[1]: {}, proxies[2]: {}, proxies[3]: {}}, openAICodexTicketProbeFanout)
+	require.Len(t, proxies, fanout)
+	require.Len(t, map[string]struct{}{proxies[0]: {}, proxies[1]: {}, proxies[2]: {}, proxies[3]: {}}, fanout)
 	require.NotNil(t, svc.lookupOpenAICodexTicket(account, "gpt-6-astra"))
 	_, hasRetryState := svc.openaiCodexTicketProbeStates.Load(openAICodexTicketKey(account.ID, "gpt-6-astra"))
 	require.False(t, hasRetryState)
@@ -576,8 +577,9 @@ func TestOpenAICodexTicketProbeRacesFourProxiesAndCancelsLosers(t *testing.T) {
 }
 
 func TestOpenAICodexTicketFourProxyMissCountsOneRoundAndKeepsOldTicket(t *testing.T) {
+	const fanout = 4
 	upstream := &codexTicketFanoutUpstream{
-		expected: openAICodexTicketProbeFanout,
+		expected: fanout,
 		ready:    make(chan struct{}),
 	}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
@@ -597,12 +599,45 @@ func TestOpenAICodexTicketFourProxyMissCountsOneRoundAndKeepsOldTicket(t *testin
 	}, nil)
 
 	require.False(t, svc.probeOnceOpenAICodexTicketWithSettings(context.Background(), account, "gpt-6-astra", settings))
-	require.Equal(t, int64(openAICodexTicketProbeFanout), upstream.started.Load())
+	require.Equal(t, int64(fanout), upstream.started.Load())
 	require.Equal(t, oldState, svc.lookupOpenAICodexTicket(account, "gpt-6-astra").State)
 	require.Equal(t, "route-test", svc.lookupOpenAICodexRouteCookie(account).Values["__cflb"])
 	raw, ok := svc.openaiCodexTicketProbeStates.Load(openAICodexTicketKey(account.ID, "gpt-6-astra"))
 	require.True(t, ok)
 	require.Equal(t, 1, raw.(openAICodexTicketProbeState).Failures)
+}
+
+func TestOpenAICodexTicketProbeUsesIndependentParallelProxySessions(t *testing.T) {
+	const parallelism = 4
+	upstream := &codexTicketFanoutUpstream{
+		expected: parallelism,
+		ready:    make(chan struct{}),
+	}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
+		Enabled:                      true,
+		TargetLength:                 292,
+		Models:                       []string{"gpt-6-astra"},
+		HarvestAttemptTimeoutSeconds: 5,
+	}, upstream)
+	proxy := testCodexProxy("dynamic", 0, 1)
+	proxy.URL = "http://user_" + openAICodexTicketProxySessionPlaceholder + ":secret@dynamic.example:8080"
+	proxy.Parallelism = parallelism
+	settings := DefaultOpenAICodexTicketRuntimeSettings()
+	settings.ProxyPool = []OpenAICodexTicketProxy{proxy}
+	account := ticketTestAccount(41)
+
+	require.False(t, svc.probeOnceOpenAICodexTicketWithSettings(context.Background(), account, "gpt-6-astra", settings))
+	require.Equal(t, int64(parallelism), upstream.started.Load())
+	upstream.mu.Lock()
+	proxies := append([]string(nil), upstream.proxies...)
+	upstream.mu.Unlock()
+	require.Len(t, proxies, parallelism)
+	unique := make(map[string]struct{}, parallelism)
+	for _, proxyURL := range proxies {
+		unique[proxyURL] = struct{}{}
+		require.NotContains(t, proxyURL, openAICodexTicketProxySessionPlaceholder)
+	}
+	require.Len(t, unique, parallelism)
 }
 
 func TestRefreshOpenAICodexTickets_ConcurrentModelsPreserveAccountSnapshot(t *testing.T) {
