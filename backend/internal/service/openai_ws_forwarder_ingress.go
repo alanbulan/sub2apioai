@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	appTimezone "github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -414,6 +415,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		imageIntent := IsImageGenerationIntentForPlatform(openAIResponsesEndpoint, originalModel, normalized, account.Platform)
 		if imageIntent && !imageGenerationAllowed {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, ImageGenerationPermissionMessage(), nil)
+		}
+		if account.IsOpenAI() {
+			timezonePayload, timezoneChanged, timezoneErr := normalizeOpenAITextRequestTimezone(normalized, appTimezone.Name(), imageIntent)
+			if timezoneErr != nil {
+				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket timezone metadata", timezoneErr)
+			}
+			if timezoneChanged {
+				normalized = timezonePayload
+			}
 		}
 		imageBillingModel := ""
 		imageSizeTier := ""

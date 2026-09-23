@@ -13,6 +13,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
+	appTimezone "github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -147,6 +148,18 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 		body = adaptedBody
 		setOpenAIResponsesClientToolMapping(c, mapping)
+	}
+
+	if account.IsOpenAI() {
+		model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+		imageRequest := IsImageGenerationIntentForPlatform(openAIResponsesEndpoint, model, body, account.Platform)
+		normalizedTimezoneBody, timezoneChanged, timezoneErr := normalizeOpenAITextRequestTimezone(body, appTimezone.Name(), imageRequest)
+		if timezoneErr != nil {
+			return nil, fmt.Errorf("normalize OpenAI request timezone: %w", timezoneErr)
+		}
+		if timezoneChanged {
+			body = normalizedTimezoneBody
+		}
 	}
 
 	originalBody := body

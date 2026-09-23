@@ -13,6 +13,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	appTimezone "github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
@@ -768,6 +769,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if accountScoped {
 		firstClientMessage = accountScopedFirst
 	}
+	firstImageIntent := IsImageGenerationIntentForPlatform(openAIResponsesEndpoint, capturedSessionModel, firstClientMessage, account.Platform)
+	if timezonePayload, timezoneChanged, timezoneErr := normalizeOpenAITextRequestTimezone(firstClientMessage, appTimezone.Name(), firstImageIntent); timezoneErr != nil {
+		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket timezone metadata", timezoneErr)
+	} else if timezoneChanged {
+		firstClientMessage = timezonePayload
+	}
 	usageMeta := newOpenAIWSPassthroughUsageMeta(initialRequestModel, firstClientMessage)
 	updatedFirst, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, capturedSessionModel, firstClientMessage)
 	if policyErr != nil {
@@ -1094,6 +1101,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 			if isResponseCreate && model != "" && model != strings.TrimSpace(gjson.GetBytes(payload, "model").String()) {
 				payload = s.ReplaceModelInBody(payload, model)
+			}
+			imageIntent := isResponseCreate && IsImageGenerationIntentForPlatform(openAIResponsesEndpoint, model, payload, account.Platform)
+			if timezonePayload, timezoneChanged, timezoneErr := normalizeOpenAITextRequestTimezone(payload, appTimezone.Name(), imageIntent); timezoneErr != nil {
+				return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket timezone metadata", timezoneErr)
+			} else if timezoneChanged {
+				payload = timezonePayload
 			}
 			out, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, model, payload)
 			// 多轮 passthrough usage：仅在成功（non-block / non-err）
