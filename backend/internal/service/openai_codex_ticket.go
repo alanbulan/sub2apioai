@@ -315,7 +315,7 @@ func (s *OpenAIGatewayService) rotateOpenAICodexTicketFixedProxy(ctx context.Con
 		return 0, errors.New("nil proxy rotation response")
 	}
 	if resp.Body != nil {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return resp.StatusCode, fmt.Errorf("proxy rotation returned HTTP %d", resp.StatusCode)

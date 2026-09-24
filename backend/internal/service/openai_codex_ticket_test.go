@@ -604,7 +604,9 @@ func TestOpenAICodexTicketFourProxyMissCountsOneRoundAndKeepsOldTicket(t *testin
 	require.Equal(t, "route-test", svc.lookupOpenAICodexRouteCookie(account).Values["__cflb"])
 	raw, ok := svc.openaiCodexTicketProbeStates.Load(openAICodexTicketKey(account.ID, "gpt-6-astra"))
 	require.True(t, ok)
-	require.Equal(t, 1, raw.(openAICodexTicketProbeState).Failures)
+	probeState, ok := raw.(openAICodexTicketProbeState)
+	require.True(t, ok)
+	require.Equal(t, 1, probeState.Failures)
 }
 
 func TestOpenAICodexTicketProbeUsesIndependentParallelProxySessions(t *testing.T) {
@@ -787,7 +789,8 @@ func TestOpenAICodexTicketProbeDoesNotRotateSessionOnHTTP400(t *testing.T) {
 	require.Equal(t, []string{upstream.proxies[0], upstream.proxies[0]}, upstream.proxies)
 	raw, ok := svc.openaiCodexTicketProbeStates.Load(key)
 	require.True(t, ok)
-	probeState := raw.(openAICodexTicketProbeState)
+	probeState, ok := raw.(openAICodexTicketProbeState)
+	require.True(t, ok)
 	require.Equal(t, 2, probeState.Failures)
 	require.Greater(t, time.Until(probeState.RetryAt), 4*time.Second)
 	require.Less(t, time.Until(probeState.RetryAt), 7*time.Second)
@@ -821,7 +824,9 @@ func TestRefreshOpenAICodexTicketsRotatesFixedProxyOnceAfterConcurrentMisses(t *
 	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol"} {
 		raw, ok := svc.openaiCodexTicketProbeStates.Load(openAICodexTicketKey(account.ID, model))
 		require.True(t, ok)
-		require.Less(t, time.Until(raw.(openAICodexTicketProbeState).RetryAt), 7*time.Second)
+		probeState, ok := raw.(openAICodexTicketProbeState)
+		require.True(t, ok)
+		require.Less(t, time.Until(probeState.RetryAt), 7*time.Second)
 	}
 }
 
@@ -883,8 +888,10 @@ func TestRefreshOpenAICodexTicketsDoesNotRotateFixedProxyOnHTTP400(t *testing.T)
 	require.Zero(t, upstream.rotateCalls)
 	raw, ok := svc.openaiCodexTicketProbeStates.Load(openAICodexTicketKey(account.ID, "gpt-6-astra"))
 	require.True(t, ok)
-	require.Greater(t, time.Until(raw.(openAICodexTicketProbeState).RetryAt), 4*time.Second)
-	require.Less(t, time.Until(raw.(openAICodexTicketProbeState).RetryAt), 7*time.Second)
+	probeState, ok := raw.(openAICodexTicketProbeState)
+	require.True(t, ok)
+	require.Greater(t, time.Until(probeState.RetryAt), 4*time.Second)
+	require.Less(t, time.Until(probeState.RetryAt), 7*time.Second)
 }
 
 func TestRefreshOpenAICodexTickets_WaitsUntilRetryOrPolicyChanges(t *testing.T) {
@@ -1045,7 +1052,7 @@ func TestRequestOpenAICodexTicketRetryIsScopedAndRateLimited(t *testing.T) {
 
 	retryAt, err := svc.RequestOpenAICodexTicketRetry(context.Background(), account, "gpt-6-astra")
 	require.NoError(t, err)
-	require.Greater(t, retryAt.Sub(time.Now()), 50*time.Second)
+	require.Greater(t, time.Until(retryAt), 50*time.Second)
 	select {
 	case <-started:
 	case <-time.After(time.Second):

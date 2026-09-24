@@ -2,9 +2,7 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -41,23 +39,6 @@ func (s *AccountTestService) openAICodexTextResponsesURL() string {
 		return chatgptCodexAPIURL
 	}
 	return strings.TrimRight(settings.BaseURL, "/") + "/responses"
-}
-
-func openAICodexWebSocketURL(raw string) (string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return "", fmt.Errorf("invalid Codex upstream URL: %w", err)
-	}
-	switch strings.ToLower(parsed.Scheme) {
-	case "https":
-		parsed.Scheme = "wss"
-	case "http":
-		parsed.Scheme = "ws"
-	case "wss", "ws":
-	default:
-		return "", fmt.Errorf("unsupported Codex WebSocket scheme: %s", parsed.Scheme)
-	}
-	return parsed.String(), nil
 }
 
 // setOpenAICodexRequestHost preserves the first-party authority override while
